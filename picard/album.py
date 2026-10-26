@@ -544,6 +544,7 @@ class Album(MetadataItem):
         metadata.length = 0
         metadata.copy(self.release_group.metadata)
         release_to_metadata(release_node, metadata, album=self)
+        self._musicbrainz_source_metadata = Metadata(metadata)
         self._release_metadata_customization(metadata, release_node)
 
     def _release_metadata_customization(self, metadata, release_node):
@@ -711,6 +712,13 @@ class Album(MetadataItem):
         tm = track.metadata
         tm.copy(metadata)
         track_to_metadata(track_node, track)
+        track._musicbrainz_source_metadata = Metadata(tm)
+        for tag, values in metadata.rawitems():
+            if (
+                tm.getall(tag) == list(values)
+                and self._musicbrainz_source_metadata.getall(tag) != list(values)
+            ):
+                track._musicbrainz_source_metadata.pop(tag, None)
         track._customize_metadata()
 
         self._new_metadata.length += tm.length

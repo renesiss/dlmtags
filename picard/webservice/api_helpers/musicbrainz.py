@@ -168,6 +168,9 @@ class MBAPIHelper(APIHelper):
         limit = kwargs.pop('limit')
         if limit:
             filters['limit'] = limit
+        offset = kwargs.pop('offset', 0)
+        if offset:
+            filters['offset'] = offset
 
         is_search = kwargs.pop('search', False)
         if is_search:
@@ -235,8 +238,9 @@ class MBAPIHelper(APIHelper):
             refresh=False,
         )
 
-    def browse_releases(self, handler: ReplyHandler, **kwargs) -> PendingRequest:
-        inc = ('media', 'labels')
+    def browse_releases(
+        self, handler: ReplyHandler, inc: Iterable[str] = ('media', 'labels'), **kwargs
+    ) -> PendingRequest:
         return self._browse('release', handler, inc, queryargs=kwargs)
 
     def browse_recordings(self, handler: ReplyHandler, inc: Iterable[str], **kwargs) -> PendingRequest:

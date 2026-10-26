@@ -446,6 +446,14 @@ class WebService(QtCore.QObject):
 
     @staticmethod
     def display_url(url: QUrl) -> str:
+        url = QUrl(url)
+        query = QtCore.QUrlQuery(url)
+        redacted = QtCore.QUrlQuery()
+        for key, value in query.queryItems():
+            redacted.addQueryItem(key, 'REDACTED' if key.casefold() in {
+                'api_key', 'token', 'access_token', 'secret', 'consumer_secret',
+            } else value)
+        url.setQuery(redacted)
         return url.toDisplayString(
             QUrl.UrlFormattingOption.RemoveUserInfo | QUrl.ComponentFormattingOption.EncodeSpaces
         )
@@ -545,7 +553,7 @@ class WebService(QtCore.QObject):
         # Check if task was aborted before starting
         task = task_ref() if task_ref else None
         if task and task.aborted:
-            log.debug("Skipping aborted task for %s", request.url().toString())
+            log.debug("Skipping aborted task for %s", self.display_url(request.url()))
             return
 
         if request.mblogin:
@@ -583,7 +591,7 @@ class WebService(QtCore.QObject):
         url, modified = WebService._strip_auth_inc_params(request.url())
         if modified:
             request.setUrl(url)
-        log.debug("Sending request without authentication: %s", request.url().toString())
+        log.debug("Sending request without authentication: %s", WebService.display_url(request.url()))
 
     @staticmethod
     def urls_equivalent(leftUrl: QUrl, rightUrl: QUrl) -> bool:
@@ -654,6 +662,8 @@ class WebService(QtCore.QObject):
 
         handler = request.handler
         response_code = self.http_response_code(reply)
+        if response_code == 503 and error == QNetworkReply.NetworkError.NoError:
+            error = QNetworkReply.NetworkError.ServiceUnavailableError
         display_reply_url = self.display_url(reply.request().url())
         if reply.attribute(QNetworkRequest.Attribute.Http2WasUsedAttribute):
             proto = 'HTTP2'
@@ -683,7 +693,7 @@ class WebService(QtCore.QObject):
                     if len(self._awaiting_authorization) >= MAX_PENDING_AUTHORIZATION_REQUESTS:
                         # Drop the oldest request to prevent unbounded growth
                         dropped = self._awaiting_authorization.pop(0)
-                        log.debug("Authorization queue full, dropping %s", dropped.url().toString())
+                        log.debug("Authorization queue full, dropping %s", self.display_url(dropped.url()))
                         if dropped.handler is not None:
                             dropped.handler(b'', _AuthorizationErrorReply(dropped), error)
                     self._awaiting_authorization.append(request)
@@ -877,7 +887,7 @@ class WebService(QtCore.QObject):
         requests = self._awaiting_authorization
         self._awaiting_authorization = []
         for request in requests:
-            log.debug("Retrying authorized request for %s", request.url().toString())
+            log.debug("Retrying authorized request for %s", self.display_url(request.url()))
             self.add_request(request)
 
     def discard_authorized_requests(self):
@@ -934,10 +944,10 @@ class WebService(QtCore.QObject):
         if modified:
             request.setUrl(url)
             request.mblogin = False
-            log.debug("Retrying without authentication: %s", url.toString())
+            log.debug("Retrying without authentication: %s", self.display_url(url))
             self.add_request(request)
         else:
-            log.debug("Cannot retry without authentication: %s", url.toString())
+            log.debug("Cannot retry without authentication: %s", self.display_url(url))
             handler = request.handler
             if handler is not None:
                 handler(b'', _AuthorizationErrorReply(request), QNetworkReply.NetworkError.AuthenticationRequiredError)

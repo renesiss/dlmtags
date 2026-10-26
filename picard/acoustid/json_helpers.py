@@ -89,9 +89,13 @@ def _make_releases_node(recording: dict[str, Any]) -> list[dict[str, Any]]:
             # So if we have releaseevents, then use them to create multiple records, and ignore what is coming on the release
             if 'releaseevents' in release:
                 for releaseevent in release['releaseevents']:
-                    release_mb['country'] = releaseevent.get('country', '')
-                    release_mb['date'] = releaseevent.get('date', '')
-                    release_list.append(release_mb)
+                    # One entry per release event. Each needs its own dict:
+                    # appending the same object would leave every entry with
+                    # the last event's country and date.
+                    event_mb = dict(release_mb)
+                    event_mb['country'] = releaseevent.get('country', '')
+                    event_mb['date'] = releaseevent.get('date', '')
+                    release_list.append(event_mb)
             else:
                 release_list.append(release_mb)
 

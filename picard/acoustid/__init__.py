@@ -63,6 +63,22 @@ def get_score(node):
         return 1.0
 
 
+def annotate_fingerprint_scores(recordings, document):
+    """Store AcoustID's own result score on each recording as 'acoustid_score'.
+
+    The recording 'score' used by Picard's matching is the result score
+    multiplied by the recording's relative source count. Smart Scan needs the
+    provider's fingerprint confidence on its own, so it is kept separately.
+    """
+    scores = {}
+    for result in document.get('results') or []:
+        if result.get('id'):
+            scores[result['id']] = get_score(result)
+    for recording in recordings:
+        if recording is not None and recording.get('acoustid') in scores:
+            recording['acoustid_score'] = scores[recording['acoustid']]
+
+
 def get_fpcalc(config=None):
     if not config:
         config = get_config()
@@ -76,7 +92,10 @@ def find_fpcalc():
     return find_executable(*FPCALC_NAMES)
 
 
-AcoustIDTask = namedtuple('AcoustIDTask', ('file', 'next_func'))
+# set_unmatched_acoustid: write the AcoustID of the best fingerprint result to
+# the file's New Tags when no recording matched (Picard's behaviour). Smart Scan
+# disables this: it only changes New Tags for a match it accepted.
+AcoustIDTask = namedtuple('AcoustIDTask', ('file', 'next_func', 'set_unmatched_acoustid'), defaults=(True,))
 
 
 class AcoustIDClient(QtCore.QObject):
@@ -112,36 +131,44 @@ class AcoustIDClient(QtCore.QObject):
             )
             task.next_func({}, http, error)
         else:
+            # Only response decoding belongs in this exception boundary.
+            # Resolver and matching callbacks can run synchronously and their
+            # programming errors must not be retried as service failures.
             try:
                 status = document['status']
-                if status == 'ok':
-                    resolver = RecordingResolver(
-                        self._acoustid_api.webservice,
-                        document,
-                        callback=partial(self._on_recording_resolve_finish, task, document, http),
-                    )
-                    resolver.resolve()
-                else:
-                    mparms = {
-                        'error': document['error']['message'],
-                        'filename': task.file.filename,
-                    }
-                    log.error("AcoustID: Lookup error for '%(filename)s': %(error)r" % mparms)
-                    self.tagger.window.set_statusbar_message(
-                        N_('AcoustID lookup failed for "%(filename)s"!'),
-                        mparms,
-                        echo=None,
-                    )
-                    task.next_func({}, http, error)
-            except (AttributeError, KeyError, TypeError) as e:
+                message = document['error']['message'] if status != 'ok' else None
+            except (KeyError, TypeError) as e:
                 log.error("AcoustID: Error reading response", exc_info=True)
                 task.next_func({}, http, e)
+                return
+
+            if status == 'ok':
+                resolver = RecordingResolver(
+                    self._acoustid_api.webservice,
+                    document,
+                    callback=partial(self._on_recording_resolve_finish, task, document, http),
+                )
+                resolver.resolve()
+            else:
+                mparms = {
+                    'error': message,
+                    'filename': task.file.filename,
+                }
+                log.error("AcoustID: Lookup error for '%(filename)s': %(error)r" % mparms)
+                self.tagger.window.set_statusbar_message(
+                    N_('AcoustID lookup failed for "%(filename)s"!'),
+                    mparms,
+                    echo=None,
+                )
+                task.next_func({}, http, error)
 
     def _on_recording_resolve_finish(self, task, document, http, result=None, error=None):
         recording_list = result
+        if recording_list:
+            annotate_fingerprint_scores(recording_list, document)
         if not recording_list:
             results = document.get('results')
-            if results:
+            if results and task.set_unmatched_acoustid:
                 # Set AcoustID in tags if there was no matching recording
                 acoustid = results[0].get('id')
                 task.file.metadata['acoustid_id'] = acoustid
@@ -173,7 +200,7 @@ class AcoustIDClient(QtCore.QObject):
                 mparms,
                 echo=None,
             )
-            task.file.clear_pending()
+            task.next_func({}, None, error)
             return
         log.debug("AcoustID: looking up the fingerprint for file '%(filename)s'" % mparms)
         self.tagger.window.set_statusbar_message(
@@ -282,8 +309,8 @@ class AcoustIDClient(QtCore.QObject):
         process.start(self._fpcalc, ['-json', '-length', '120', file_path])
         log.debug("Starting fingerprint calculator %r %r", self._fpcalc, task.file.filename)
 
-    def analyze(self, file, next_func):
-        fpcalc_next = partial(self._lookup_fingerprint, AcoustIDTask(file, next_func))
+    def analyze(self, file, next_func, set_unmatched_acoustid=True):
+        fpcalc_next = partial(self._lookup_fingerprint, AcoustIDTask(file, next_func, set_unmatched_acoustid))
         task = AcoustIDTask(file, fpcalc_next)
 
         config = get_config()

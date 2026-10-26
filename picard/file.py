@@ -72,6 +72,12 @@ from mutagen import (
     MutagenError,
 )
 
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtNetwork import (
+    QNetworkReply,
+    QNetworkRequest,
+)
+
 from picard import (
     PICARD_APP_NAME,
     log,
@@ -83,6 +89,7 @@ from picard.const.sys import (
     IS_WIN,
 )
 from picard.debug_opts import DebugOpt
+from picard.discogsgenre import DiscogsResponses
 from picard.i18n import (
     N_,
     gettext as _,
@@ -94,9 +101,32 @@ from picard.matching import (
     compare_to_track,
     find_best_match_with_margin,
 )
+from picard.mbjson import recording_to_metadata
 from picard.metadata import Metadata
+from picard.tagprovenance import set_source
 from picard.plugin import PluginFunctions
 from picard.script import get_file_naming_script
+from picard.smartgenre import SmartGenreRequest
+from picard.smartscan import (
+    RELEASE_SPECIFIC_TAGS,
+    Decision,
+    Outcome,
+    SmartScanThresholds,
+    Source,
+    TagSuggestion,
+    combine as combine_smart_scan_decisions,
+    confirmable_recordings,
+    confirmed_decision,
+    decide as decide_smart_scan,
+    file_hints,
+    first_release_date,
+    metadata_lookup_useful,
+    normalize_release_date,
+    protected_snapshot,
+    restore_protected,
+    tag_suggestions,
+)
+from picard.tagsearch import TagSearchRequest
 from picard.tags import (
     ALL_TAGS,
     calculated_tag_names,
@@ -226,6 +256,8 @@ class FileIdentity:
 
 
 class File(MetadataItem):
+    metadata_updated = pyqtSignal()
+
     NAME: str | None = None
     # Logical tag format key and description for the family of this handler.
     # Subclasses should override for format families (e.g. ID3, Vorbis, APEv2).
@@ -277,6 +309,48 @@ class File(MetadataItem):
         self.parent_item = None
 
         self._lookup_task = None
+        self._smart_scan_token = None
+        self.smart_scan_stage = None
+        # Last Smart Scan result (picard.smartscan.Decision), for review/UI.
+        self.smart_scan_decision: Decision | None = None
+        self._smart_scan_acoustid_decision: Decision | None = None
+        # Pre-match values that a Smart Scan match must not drop (see
+        # picard.smartscan.is_protected_tag), and artwork to keep when the
+        # release could not be verified. Only set for Smart Scan matches.
+        self._smart_scan_protected: dict[str, list[str]] | None = None
+        self._smart_scan_images: ImageList | None = None
+        self._smart_scan_unverified_recording_id: str | None = None
+        self._smart_scan_expected: Metadata | None = None
+        self._manually_edited_tags: set[str] = set()
+        self._tag_search_requests = {}
+        # Discogs responses shared by Smart Genre and Find Tag for this file.
+        self.dlmtags_discogs_responses = DiscogsResponses()
+        # Album values offered after a Smart Scan whose release was not
+        # verified (picard.tagsearch.TagCandidate). Never applied unless chosen.
+        self.dlmtags_album_search: TagSearchRequest | None = None
+        self.dlmtags_album_suggestions = []
+        # Year ('date') a Smart Scan match keeps in New Tags: (recording MBID,
+        # values). A different first-release date is only suggested, as
+        # (date, source, url), never applied over a date already present.
+        self._smart_scan_date: tuple[str, list[str]] | None = None
+        self.dlmtags_date_suggestion: tuple[str, str, str] | None = None
+        # Unverified Artist/Title when Smart Scan could not verify the
+        # recording (picard.smartscan.TagSuggestion). Shown, never applied.
+        self.dlmtags_tag_suggestions = {}
+        self._credit_lookup_token = None
+        self._credit_lookup_task = None
+        # MusicBrainz recordings fetched for their artist credit, by MBID.
+        self._dlmtags_credit_nodes = {}
+        self._smart_genre_request: SmartGenreRequest | None = None
+        self._smart_genre_recording_id: str | None = None
+        self._smart_genre_applying = False
+        self.dlmtags_tag_sources: dict[str, str] = {}
+        self._dlmtags_source_values = {}
+        self._dlmtags_source_recordings = {}
+        self.dlmtags_tag_urls: dict[str, str] = {}
+        self.smart_genre_source: str | None = None
+        self.smart_genre_values: list[str] = []
+        self.smart_genre_diagnostics: list[dict[str, str]] = []
 
         self.acoustid_fingerprint = None
         self.acoustid_length = 0
@@ -437,6 +511,64 @@ class File(MetadataItem):
             to_metadata[tag] = from_metadata[tag]
 
     def copy_metadata(self, metadata, preserve_deleted=True):
+        if metadata is self.orig_metadata and self._smart_genre_applying:
+            # Detaching the old Track is part of applying the new match.
+            # It must not roll back suggestions already shown in New Tags.
+            metadata = Metadata(self.metadata)
+        reverting = metadata is self.orig_metadata
+        manual_values = {}
+        missing_values = {}
+        if self._smart_scan_expected is not None and not reverting:
+            self._remember_manual_changes()
+            manual_values = {
+                tag: list(self.metadata.getall(tag)) for tag in self._manually_edited_tags
+            }
+            missing_values = {
+                tag: list(values) for tag, values in self.metadata.rawitems()
+                if not tag.startswith('~') and not metadata.getall(tag)
+            }
+        elif reverting:
+            self._smart_scan_expected = None
+            self._manually_edited_tags.clear()
+            self.dlmtags_tag_sources.clear()
+            self._dlmtags_source_values.clear()
+            self._dlmtags_source_recordings.clear()
+            self.dlmtags_tag_urls.clear()
+            self._smart_scan_date = None
+            self.dlmtags_date_suggestion = None
+        if self._smart_scan_date is not None and (
+            metadata['musicbrainz_recordingid'] and metadata['musicbrainz_recordingid'] != self._smart_scan_date[0]
+        ):
+            # Another recording: its own date applies, not this match's year.
+            self._smart_scan_date = None
+            self.dlmtags_date_suggestion = None
+        unverified = self._smart_scan_unverified_recording_id
+        if unverified and not self._smart_genre_applying and (
+            metadata is self.orig_metadata
+            or (metadata['musicbrainz_recordingid'] and metadata['musicbrainz_recordingid'] != unverified)
+        ):
+            self._smart_scan_unverified_recording_id = None
+            unverified = None
+        release_values = (
+            {tag: list(self.metadata.getall(tag)) for tag in RELEASE_SPECIFIC_TAGS} if unverified else {}
+        )
+        keep_genre = self._smart_genre_recording_id is not None
+        if keep_genre and not self._smart_genre_applying and (
+            metadata is self.orig_metadata
+            or (
+                metadata['musicbrainz_recordingid']
+                and metadata['musicbrainz_recordingid'] != self._smart_genre_recording_id
+            )
+        ):
+            self.cancel_smart_genre()
+            self._smart_genre_recording_id = None
+            keep_genre = False
+        genre = list(self.metadata.getall('genre')) if keep_genre else None
+        if self._smart_scan_images is not None and (
+            metadata is not self.orig_metadata or self._smart_genre_applying
+        ):
+            # Keep artwork edits made after the match as well as the snapshot.
+            self._smart_scan_images = self.metadata.images.copy()
         saved_metadata = {}
 
         # Keep current value for special tags that got calculated from audio content
@@ -451,7 +583,8 @@ class File(MetadataItem):
             if tag in preserved_tags or tag in default_preserved_tags:
                 saved_metadata[tag] = values
         deleted_tags = self.metadata.deleted_tags
-        images_changed = self.metadata.images != metadata.images
+        previous_images = self.metadata.images
+        images_changed = previous_images != metadata.images
         self.metadata.copy(metadata)
         self._copy_file_info_tags(metadata, self.orig_metadata)
         if preserve_deleted:
@@ -459,8 +592,73 @@ class File(MetadataItem):
                 del self.metadata[tag]
         self.metadata.update(saved_metadata)
 
+        if metadata is self.orig_metadata and not self._smart_genre_applying:
+            # Reverting to the file's own tags (file left its track): the
+            # protection of a previous Smart Scan match no longer applies.
+            self._smart_scan_protected = None
+            self._smart_scan_images = None
+        else:
+            if self._smart_scan_protected:
+                restore_protected(self.metadata, self._smart_scan_protected)
+            if self._smart_scan_images is not None:
+                self.metadata.images = self._smart_scan_images.copy()
+                images_changed = previous_images != self.metadata.images
+
+        for tag, values in release_values.items():
+            self.metadata[tag] = values
+            if tag not in deleted_tags:
+                self.metadata.deleted_tags.discard(tag)
+
+        if genre is not None:
+            self.metadata['genre'] = genre
+            # Suppressing an automatic album genre is not a user deletion.
+            if 'genre' not in deleted_tags:
+                self.metadata.deleted_tags.discard('genre')
+
+        for tag, values in missing_values.items():
+            if tag not in self.metadata.deleted_tags:
+                self.metadata[tag] = values
+        if self._smart_scan_date is not None and not reverting:
+            # Neither a verified release (possibly a compilation) nor an
+            # unverified one decides the Year; the first release does. A
+            # loaded release may carry the recording's MusicBrainz first-release date.
+            recording_first = normalize_release_date(metadata['~recording_firstreleasedate'])
+            if not self._smart_scan_date[1] and recording_first and 'date' not in self._manually_edited_tags:
+                self._smart_scan_date = (self._smart_scan_date[0], [recording_first])
+                self.metadata['date'] = recording_first
+                set_source(self, 'date', 'MusicBrainz', 'https://musicbrainz.org/recording/' + self._smart_scan_date[0])
+            if self._smart_scan_date[1]:
+                self.metadata['date'] = self._smart_scan_date[1]
+            else:
+                self.metadata.unset('date')
+            if 'date' not in deleted_tags:
+                self.metadata.deleted_tags.discard('date')
+        for tag, values in manual_values.items():
+            self.metadata[tag] = values
+        if self._smart_scan_expected is not None:
+            self._smart_scan_expected = Metadata(self.metadata)
         if images_changed:
             self.metadata_images_changed.emit()
+        self.metadata_updated.emit()
+
+    def _remember_manual_changes(self):
+        if self._smart_scan_expected is None:
+            return
+        for tag in set(self.metadata) | set(self._smart_scan_expected):
+            if not tag.startswith('~') and self.metadata.getall(tag) != self._smart_scan_expected.getall(tag):
+                if self._dlmtags_source_values.get(tag) == tuple(self.metadata.getall(tag)):
+                    continue
+                self._manually_edited_tags.add(tag)
+                set_source(self, tag, 'Manual')
+        self._manually_edited_tags.update(self.metadata.deleted_tags)
+
+    @property
+    def tag_search_pending(self):
+        return any(request.active for request in self._tag_search_requests.values())
+
+    def cancel_tag_searches(self):
+        for request in list(self._tag_search_requests.values()):
+            request.cancel()
 
     def keep_original_images(self):
         if self.metadata.images != self.orig_metadata.images:
@@ -903,6 +1101,9 @@ class File(MetadataItem):
             self.parent_item.remove_file(self)
         self.tagger.acoustidmanager.remove(self)
         self.tagger.isrc_submit_manager.remove(self)
+        self.cancel_smart_genre()
+        self.cancel_tag_searches()
+        self.clear_lookup_task()
         self.state = File.State.REMOVED
 
     def move(self, to_parent_item):
@@ -1181,6 +1382,451 @@ class File(MetadataItem):
                 pass
         return value
 
+    # --- Smart Scan (DLMtags) ---------------------------------------------
+    #
+    # Scan = AcoustID fingerprint lookup, then at most one metadata Lookup if
+    # the fingerprint result is not usable. Each stage result is judged by
+    # picard.smartscan.decide(); only a MATCHED decision changes New Tags.
+    # Nothing is ever written to disk here.
+
+    def start_smart_scan(self):
+        """Run AcoustID once, followed by metadata lookup only if unmatched."""
+        if (
+            self._smart_scan_token is not None
+            or self._lookup_task
+            or self.state
+            in {
+                File.State.PENDING,
+                File.State.REMOVED,
+            }
+        ):
+            return
+        self.cancel_smart_genre()
+        self.cancel_tag_searches()
+        if self._smart_scan_expected is None:
+            self._manually_edited_tags.update(
+                tag for tag in set(self.metadata) | set(self.orig_metadata)
+                if not tag.startswith('~') and self.metadata.getall(tag) != self.orig_metadata.getall(tag)
+            )
+        else:
+            self._remember_manual_changes()
+        self._manually_edited_tags.update(self.metadata.deleted_tags)
+        self._smart_scan_expected = Metadata(self.metadata)
+        token = self._smart_scan_token = object()
+        self.smart_scan_stage = 'scan'
+        self.smart_scan_decision = None
+        self._smart_scan_date = None
+        self.dlmtags_date_suggestion = None
+        self.dlmtags_album_search = None
+        self.dlmtags_album_suggestions = []
+        self.dlmtags_tag_suggestions = {}
+        self.cancel_credit_lookup()
+        self._dlmtags_credit_nodes = {}
+        self._smart_scan_acoustid_decision = None
+        self.set_pending()
+        self.tagger._acoustid.analyze(
+            self,
+            partial(self._smart_scan_finished, token, File.LookupType.ACOUSTID),
+            set_unmatched_acoustid=False,
+        )
+
+    def _smart_scan_finished(self, token, lookuptype, document, http, error):
+        # Ignore callbacks from cancelled or superseded operations.
+        expected_stage = 'scan' if lookuptype == File.LookupType.ACOUSTID else 'lookup'
+        if token is not self._smart_scan_token or self.smart_scan_stage != expected_stage:
+            return
+        self._lookup_task = None
+        if self.state == File.State.REMOVED:
+            return
+        http_status = http.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute) if http is not None else None
+        if http_status == 503 and error != QNetworkReply.NetworkError.OperationCanceledError:
+            error = QNetworkReply.NetworkError.ServiceUnavailableError
+            log.warning(
+                'Smart Scan: temporary HTTP 503 during %s for %r; recording conflicts were not evaluated',
+                lookuptype.name.lower(), self.filename,
+            )
+        if error:
+            log.error(
+                "Smart Scan: network error during the %s lookup for %s. Error code: %s",
+                lookuptype.name.lower(),
+                self.filename,
+                error,
+            )
+
+        source = Source.ACOUSTID if lookuptype == File.LookupType.ACOUSTID else Source.METADATA
+        config = get_config()
+        thresholds = SmartScanThresholds.from_config(config)
+        decision = decide_smart_scan(
+            source,
+            document,
+            error,
+            self.metadata,
+            self.base_filename,
+            FILE_COMPARISON_WEIGHTS,
+            thresholds=thresholds,
+            config=config,
+            cancelled=error == QNetworkReply.NetworkError.OperationCanceledError,
+        )
+        if http_status == 503 and decision.outcome == Outcome.ERROR:
+            decision.details.update(http_status=503, temporary=True)
+        self._log_smart_scan_decision(decision)
+
+        if source == Source.ACOUSTID:
+            if metadata_lookup_useful(decision, file_hints(self.metadata, self.base_filename)):
+                # The fingerprint gave no usable result, or its recording
+                # disagrees with the file's artist/title: one metadata Lookup.
+                # A weak fingerprint candidate or the review is kept on the
+                # decision and weighed again in combine().
+                self._smart_scan_acoustid_decision = decision
+                self.smart_scan_stage = 'lookup'
+                self._smart_scan_lookup_metadata()
+                return
+        else:
+            decision = combine_smart_scan_decisions(self._smart_scan_acoustid_decision, decision, thresholds)
+            if decision.outcome != Outcome.CANCELLED:
+                self._log_smart_scan_decision(decision, final=True)
+        self._finish_smart_scan(decision)
+
+    def _smart_scan_lookup_metadata(self):
+        """The single metadata Lookup of a Smart Scan.
+
+        Uses filename-derived artist/title only where those tags are missing.
+        """
+        hints = file_hints(self.metadata, self.base_filename)
+        metadata = self.metadata
+        config = get_config()
+        self.tagger.window.set_statusbar_message(
+            N_("Looking up the metadata for file %(filename)s …"),
+            {'filename': self.filename},
+        )
+        if hints.filename_text:
+            # There is no trustworthy artist/title boundary yet. Use Picard's
+            # plain text search; verify each result against its returned credits.
+            self._lookup_task = self.tagger.mb_api.find_tracks(
+                partial(self._smart_scan_finished, self._smart_scan_token, File.LookupType.METADATA),
+                search=True, advanced_search=False, query=hints.filename_text,
+                limit=config.setting['query_limit'],
+            )
+            return
+        self._lookup_task = self.tagger.mb_api.find_tracks(
+            partial(self._smart_scan_finished, self._smart_scan_token, File.LookupType.METADATA),
+            track=hints.title or metadata['title'],
+            artist=hints.artist or metadata['artist'],
+            # Release tags can be stale; they must not restrict recording search.
+            release='',
+            tnum='',
+            tracks='',
+            qdur=str(metadata.length // 2000),
+            isrc=metadata['isrc'],
+            limit=config.setting['query_limit'],
+        )
+
+    def _finish_smart_scan(self, decision):
+        self._smart_scan_token = None
+        self.smart_scan_stage = None
+        self._smart_scan_acoustid_decision = None
+        self.smart_scan_decision = decision
+        if decision.outcome not in {Outcome.MATCHED, Outcome.CANCELLED}:
+            # Unverified recording: Artist/Title are offered, not applied.
+            recording_id = self._set_tag_suggestions(decision)
+            if recording_id:
+                self._start_credit_lookup(decision, recording_id)
+        if decision.outcome == Outcome.MATCHED:
+            self._smart_genre_recording_id = decision.recording_id
+            self._smart_genre_applying = True
+            try:
+                self._apply_smart_scan_match(decision)
+            finally:
+                self._smart_genre_applying = False
+            self._start_smart_genre(decision)
+        # Needs Review / No Match / Error: New Tags are left exactly as they are.
+        self.tagger.window.set_statusbar_message(
+            N_('Smart Scan "%(filename)s": %(decision)s'),
+            {'filename': self.filename, 'decision': decision.describe()},
+            timeout=3000,
+        )
+        self.clear_pending()
+        self._start_smart_album_search(decision)
+
+    def _start_smart_album_search(self, decision):
+        # Second pass is suggestions-only, using the existing providers.
+        if (
+            decision.outcome != Outcome.MATCHED
+            or decision.release_verified
+            or self.state == File.State.REMOVED
+        ):
+            return
+
+        request = TagSearchRequest(self, 'album')
+        self.dlmtags_album_search = request
+
+        def completed(candidates, message):
+            if (
+                self.state == File.State.REMOVED
+                or self.smart_scan_decision is not decision
+                or self.dlmtags_album_search is not request
+                or not request.current()
+            ):
+                return
+            # Keep the real candidates: choosing one applies it through the
+            # same request, with its provenance and stale-result checks.
+            self.dlmtags_album_suggestions = [candidate for candidate in candidates if candidate.values]
+            self.tagger.tagger_stats_changed.emit()
+
+        request.completed.connect(completed)
+        request.start()
+
+    # --- Confirm Results (DLMtags) ----------------------------------------
+    #
+    # After Needs Review the user may confirm one of the scan's recordings.
+    # It becomes a Matched decision marked user_confirmed: Artist/Title are
+    # applied to New Tags as for a match, the remaining tags are looked up
+    # with the existing album, genre and artwork mechanisms. Nothing is saved.
+
+    def confirmable_recordings(self):
+        if self._smart_scan_token is not None:
+            return []
+        return confirmable_recordings(self.smart_scan_decision, self._dlmtags_credit_nodes)
+
+    def manual_identity_edits(self):
+        """Artist/Title the user edited since the scan; a confirmation keeps them."""
+        self._remember_manual_changes()
+        return [tag for tag in ('artist', 'title') if tag in self._manually_edited_tags]
+
+    def confirm_recording(self, decision, recording_id, *, replace_manual=False):
+        """Confirm a recording of this file's current review; False if stale."""
+        if (
+            decision is not self.smart_scan_decision
+            or self._smart_scan_token is not None
+            or self._smart_scan_expected is None
+            or self.state in {File.State.PENDING, File.State.REMOVED}
+        ):
+            return False
+        confirmed = confirmed_decision(
+            decision, recording_id, self.metadata, self.base_filename, FILE_COMPARISON_WEIGHTS,
+            self._dlmtags_credit_nodes,
+        )
+        if confirmed is None:
+            return False
+        self.cancel_credit_lookup()
+        self._remember_manual_changes()
+        if replace_manual:
+            # Approved by the user: Artist/Title are no longer manual edits.
+            for tag in ('artist', 'title'):
+                self._manually_edited_tags.discard(tag)
+                self._smart_scan_expected[tag] = self.metadata.getall(tag)
+        self.dlmtags_tag_suggestions = {}
+        self.dlmtags_date_suggestion = None
+        self._finish_smart_scan(confirmed)
+        return True
+
+    def _suggest_confirmed_date(self, track):
+        """The first-release Year of a user-confirmed recording, as a suggestion."""
+        self._smart_scan_date = None
+        first = first_release_date(track)
+        if not first or 'date' in self.metadata.deleted_tags or 'date' in self._manually_edited_tags:
+            return
+        current = [value for value in self.metadata.getall('date') if value.strip()]
+        url = 'https://musicbrainz.org/recording/' + track['id']
+        if not current:
+            self.dlmtags_tag_suggestions['date'] = TagSuggestion(
+                first, 'MusicBrainz', tuple(self.metadata.getall('date')), recording_id=track['id'],
+            )
+        elif first[:4] != current[0][:4]:
+            self.dlmtags_date_suggestion = (first, 'MusicBrainz', url)
+
+    def _genre_suggested(self, decision, request, values, source, status):
+        if self.smart_scan_decision is not decision or self.state == File.State.REMOVED or not values:
+            return
+        styles = request.styles if source.startswith('Discogs') else []
+        for tag, tag_values in (('genre', values), ('style', styles)):
+            current = self.metadata.getall(tag)
+            if (
+                tag_values and not any(value.strip() for value in current)
+                and tag not in self._manually_edited_tags and tag not in self.metadata.deleted_tags
+            ):
+                self.dlmtags_tag_suggestions[tag] = TagSuggestion(
+                    '; '.join(tag_values), source, tuple(current), recording_id=decision.recording_id,
+                )
+        self.update()
+
+    def _set_tag_suggestions(self, decision):
+        suggestions, lookup = tag_suggestions(
+            decision, self.metadata, self.base_filename, self._manually_edited_tags, self._dlmtags_credit_nodes,
+        )
+        self.dlmtags_tag_suggestions = suggestions
+        return lookup
+
+    def _start_credit_lookup(self, decision, recording_id):
+        """One MusicBrainz recording lookup for the artist credit of an
+        unverified suggestion: AcoustID results carry no credit join phrases."""
+        token = self._credit_lookup_token = object()
+        self._credit_lookup_task = self.tagger.mb_api.get_track_by_id(
+            recording_id,
+            partial(self._credit_lookup_finished, token, decision, recording_id),
+            inc=('artist-credits',),
+        )
+
+    def _credit_lookup_finished(self, token, decision, recording_id, document, http, error):
+        if token is not self._credit_lookup_token:
+            return
+        self._credit_lookup_token = None
+        self._credit_lookup_task = None
+        if (
+            error
+            or self.state == File.State.REMOVED
+            or self.smart_scan_decision is not decision
+            or not isinstance(document, dict)
+            or document.get('id') != recording_id
+        ):
+            return
+        self._dlmtags_credit_nodes[recording_id] = document
+        self._set_tag_suggestions(decision)
+        self.update()
+
+    def cancel_credit_lookup(self):
+        task, self._credit_lookup_task = self._credit_lookup_task, None
+        self._credit_lookup_token = None
+        if task is not None:
+            self.tagger.webservice.abort_task(task)
+
+    @property
+    def smart_genre_pending(self):
+        return self._smart_genre_request is not None and self._smart_genre_request.active
+
+    def cancel_smart_genre(self):
+        if self._smart_genre_request is not None:
+            self._smart_genre_request.cancel()
+
+    def _start_smart_genre(self, decision):
+        if (
+            decision.outcome != Outcome.MATCHED
+            or self.smart_genre_pending
+            or not get_config().setting['use_genres']
+            or get_config().setting['max_genres'] < 1
+            or any(value.strip() for value in self.metadata.getall('genre'))
+            or 'genre' in self.metadata.deleted_tags
+            or self.state == File.State.REMOVED
+        ):
+            return
+        self.smart_genre_source = None
+        self.smart_genre_values = []
+        self.smart_genre_diagnostics = []
+        if decision.user_confirmed:
+            # Same providers; the values only become suggestions to review.
+            request = SmartGenreRequest(
+                self, decision,
+                on_result=lambda values, source, status: self._genre_suggested(
+                    decision, request, values, source, status,
+                ),
+            )
+        else:
+            request = SmartGenreRequest(self, decision)
+        self._smart_genre_request = request
+        request.start()
+
+    def _apply_smart_scan_match(self, decision):
+        track = decision.match.track
+        recording_id = track['id']
+        self._smart_scan_unverified_recording_id = None if decision.release_verified else recording_id
+        if decision.user_confirmed:
+            first_release = None
+            self._suggest_confirmed_date(track)
+        else:
+            first_release = self._plan_smart_scan_date(track)
+        if self._smart_scan_expected is not None:
+            # The recording is confirmed even if no release can be verified.
+            suggestions = Metadata()
+            recording_to_metadata(track, suggestions)
+            proposed = Metadata(self.metadata)
+            proposed.update(suggestions)
+            self.copy_metadata(proposed)
+            for tag, values in suggestions.rawitems():
+                if values and self.metadata.getall(tag) == list(values) and tag not in self._manually_edited_tags:
+                    set_source(self, tag, 'MusicBrainz', 'https://musicbrainz.org/recording/' + recording_id)
+            if first_release and self.metadata.getall('date') == [first_release]:
+                set_source(self, 'date', 'MusicBrainz', 'https://musicbrainz.org/recording/' + recording_id)
+            self.update()
+        if decision.source == Source.ACOUSTID:
+            acoustid = track.get('acoustid')
+            if acoustid:
+                self.metadata['acoustid_id'] = acoustid
+                set_source(self, 'acoustid_id', 'AcoustID')
+            self.tagger.acoustidmanager.add(self, recording_id)
+        # Snapshot after acoustid_id is set, so the new AcoustID is kept.
+        self._smart_scan_protected = protected_snapshot(self.metadata) or None
+        if decision.release_verified or not self.metadata.images:
+            self._smart_scan_images = None
+        else:
+            # Artwork of an unverified release must not replace existing art.
+            self._smart_scan_images = self.metadata.images.copy()
+        release = decision.release
+        if decision.release_verified and release and release.get('release-group', {}).get('id'):
+            releasegroup = self.tagger.get_release_group_by_id(release['release-group']['id'])
+            releasegroup.loaded_albums.add(release['id'])
+            self.tagger.move_file_to_track(self, release['id'], recording_id)
+        else:
+            self.tagger.move_file_to_nat(self, recording_id)
+
+    def _plan_smart_scan_date(self, track):
+        """Decide the Year of a match before any copy; return the first-release date.
+
+        A date already in New Tags stays (a different year becomes a suggestion);
+        an empty one takes the recording's first release; a user deletion stays.
+        """
+        recording_id = track['id']
+        first = first_release_date(track)
+        current = [value for value in self.metadata.getall('date') if value.strip()]
+        self.dlmtags_date_suggestion = None
+        if 'date' in self.metadata.deleted_tags:
+            self._smart_scan_date = None
+        elif current:
+            self._smart_scan_date = (recording_id, current)
+            if first and first[:4] != current[0][:4]:
+                self.dlmtags_date_suggestion = (
+                    first, 'MusicBrainz', 'https://musicbrainz.org/recording/' + recording_id,
+                )
+        else:
+            self._smart_scan_date = (recording_id, [first] if first else [])
+        return first
+
+    def _log_smart_scan_decision(self, decision, final=False):
+        log.debug(
+            "Smart Scan%s: %r %s -> %s reasons=%s notes=%s recording=%s release=%s verified=%s",
+            ' (final)' if final else '',
+            self.filename,
+            decision.source,
+            decision.outcome,
+            [str(r) for r in decision.reasons],
+            [str(r) for r in decision.notes],
+            decision.recording_id,
+            decision.release_id,
+            decision.release_verified,
+        )
+        if dbg := log.debug_if(DebugOpt.MATCHING):
+            for i, c in enumerate(decision.candidates[:5]):
+                dbg(
+                    "  #%d %s sim=%.4f fp=%s %r by %r (%s) release=%r reasons=%s",
+                    i + 1,
+                    c.source,
+                    c.similarity,
+                    'n/a' if c.fingerprint_score is None else '%.4f' % c.fingerprint_score,
+                    c.title,
+                    c.artist,
+                    c.recording_id,
+                    c.release_title,
+                    [str(r) for r in c.reasons],
+                )
+
+    def cancel_smart_scan(self):
+        if self._smart_scan_token is not None:
+            self._smart_scan_token = None
+            self.smart_scan_stage = None
+            self._smart_scan_acoustid_decision = None
+            self.smart_scan_decision = Decision(Outcome.CANCELLED)
+            self.tagger._acoustid.stop_analyze(self)
+            self.clear_pending()
+
     def _lookup_finished(self, lookuptype, document, http, error):
         self._lookup_task = None
 
@@ -1311,13 +1957,12 @@ class File(MetadataItem):
 
     def lookup_metadata(self):
         """Try to identify the file using the existing metadata."""
-        if self._lookup_task:
+        if self._lookup_task or self.smart_scan_stage is not None or self.state == File.State.REMOVED:
             return
         self.tagger.window.set_statusbar_message(
             N_("Looking up the metadata for file %(filename)s …"),
             {'filename': self.filename},
         )
-        self.clear_lookup_task()
         metadata = self.metadata
         self.set_pending()
         config = get_config()
@@ -1334,6 +1979,8 @@ class File(MetadataItem):
         )
 
     def clear_lookup_task(self):
+        self.cancel_smart_scan()
+        self.cancel_credit_lookup()
         if self._lookup_task:
             self.tagger.webservice.abort_task(self._lookup_task)
             self._lookup_task = None
@@ -1354,6 +2001,7 @@ class File(MetadataItem):
     def update_item(self, update_selection=True):
         if self.ui_item:
             self.ui_item.update(update_selection=update_selection)
+        self.metadata_updated.emit()
 
     def iterfiles(self, save=False):
         yield self

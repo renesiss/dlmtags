@@ -922,7 +922,7 @@ class Tagger(QtWidgets.QApplication):
         else:
             self._callback_timer_running = False
 
-    def _file_loaded(self, file, target=None, remove_file=False, unmatched_files=None):
+    def _file_loaded(self, file, target=None, remove_file=False, unmatched_files=None, metadata_only=False):
         config = get_config()
         self._pending_files_count -= 1
         if self._pending_files_count == 0:
@@ -937,6 +937,12 @@ class Tagger(QtWidgets.QApplication):
             return
 
         if file.has_error():
+            self.unclustered_files.add_file(file)
+            return
+
+        if metadata_only:
+            # Explicit editor preview: retain the real File lifecycle but do not
+            # resolve embedded MBIDs, cluster or start recognition automatically.
             self.unclustered_files.add_file(file)
             return
 
@@ -1029,8 +1035,12 @@ class Tagger(QtWidgets.QApplication):
             elif isinstance(target, ClusterList):
                 self.cluster(files)
 
-    def add_files(self, filenames, target=None):
-        """Add files to the tagger."""
+    def add_files(self, filenames, target=None, *, metadata_only=False, on_loaded=None):
+        """Add files; metadata_only skips automatic matching for editor previews.
+
+        on_loaded runs on the GUI thread after each newly loaded file has been
+        placed in the domain graph. Already registered files are never reloaded.
+        """
         ignoreregex = None
         config = get_config()
         pattern = config.setting['ignore_regex']
@@ -1066,11 +1076,18 @@ class Tagger(QtWidgets.QApplication):
             self.window.suspend_while_loading_enter()
             self._pending_files_count += len(new_files)
             unmatched_files = []
-            self._load_files_batch(new_files, target, unmatched_files)
+            self._load_files_batch(new_files, target, unmatched_files, metadata_only=metadata_only, on_loaded=on_loaded)
 
-    def _load_files_batch(self, files: list, target: object, unmatched_files: list) -> None:
+    def _load_files_batch(
+        self, files: list, target: object, unmatched_files: list, *, metadata_only=False, on_loaded=None
+    ) -> None:
         """Dispatch file loads using time-budgeted batching."""
-        callback = partial(self._file_loaded, target=target, unmatched_files=unmatched_files)
+
+        def callback(file, **kwargs):
+            self._file_loaded(file, target=target, unmatched_files=unmatched_files, metadata_only=metadata_only, **kwargs)
+            if on_loaded is not None:
+                on_loaded(file)
+
         self._process_in_batches(files, lambda f: f.load(callback), "File load dispatch")
 
     @staticmethod
@@ -1092,12 +1109,12 @@ class Tagger(QtWidgets.QApplication):
             except OSError as err:
                 log.warning(err)
 
-    def add_paths(self, paths, target=None):
+    def add_paths(self, paths, target=None, *, metadata_only=False, on_loaded=None):
         config = get_config()
         files = self._scan_paths_recursive(
             paths, config.setting['recursively_add_files'], config.setting["ignore_hidden_files"]
         )
-        self.add_files(files, target=target)
+        self.add_files(files, target=target, metadata_only=metadata_only, on_loaded=on_loaded)
 
     def get_file_lookup(self):
         """Return a FileLookup object."""
@@ -1521,8 +1538,7 @@ class Tagger(QtWidgets.QApplication):
                     # Result appears asynchronously; acknowledge the action once.
                     flash_busy_cursor()
                     flashed = True
-                file.set_pending()
-                self._acoustid.analyze(file, partial(file._lookup_finished, File.LookupType.ACOUSTID))
+                file.start_smart_scan()
 
     def generate_fingerprints(self, objs):
         """Generate the fingerprints without matching the files."""

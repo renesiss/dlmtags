@@ -93,6 +93,33 @@ class WebServiceAuthorizationTest(PicardTestCase):
         reply.errorString.return_value = 'Authorization required'
         return reply
 
+    def test_http_503_retries_with_backoff_even_without_qt_error(self):
+        handler = MagicMock()
+        request = self._make_mblogin_request(handler=handler)
+        request.mblogin = False
+        reply = self._make_reply(status_code=503)
+        self.ws._active_requests[reply] = request
+        with patch.object(self.ws, 'add_request') as retry:
+            self.ws._handle_reply(reply, request)
+        retry.assert_called_once_with(request)
+        handler.assert_not_called()
+        self.mock_ratecontrol.adjust.assert_called_once()
+        self.assertTrue(self.mock_ratecontrol.adjust.call_args.args[1])
+
+    def test_exhausted_http_503_is_delivered_as_service_error(self):
+        handler = MagicMock()
+        request = self._make_mblogin_request(handler=handler)
+        request.mblogin = False
+        while not request.max_retries_reached():
+            request.mark_for_retry()
+        reply = self._make_reply(status_code=503)
+        self.ws._active_requests[reply] = request
+        with patch.object(self.ws, 'add_request') as retry:
+            self.ws._handle_reply(reply, request)
+        retry.assert_not_called()
+        handler.assert_called_once()
+        self.assertEqual(QNetworkReply.NetworkError.ServiceUnavailableError, handler.call_args.args[2])
+
     def test_401_mblogin_queues_request(self):
         """A 401 on an mblogin request should queue it for retry."""
         request = self._make_mblogin_request()

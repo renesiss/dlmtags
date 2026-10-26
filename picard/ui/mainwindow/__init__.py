@@ -148,7 +148,9 @@ from picard.ui import (
 from picard.ui.aboutdialog import AboutDialog
 from picard.ui.coverartbox import CoverArtBox
 from picard.ui.enums import MainAction
-from picard.ui.filebrowser import FileBrowser
+from picard.ui.dlmtags.sidebar import FileBrowserSidebar
+from picard.ui.dlmtags.tag_editor import StructuredMetadataBox
+from picard.ui.dlmtags.workspace import DLMtagsWorkspace
 from picard.ui.filter import Filter
 from picard.ui.infodialog import (
     AlbumInfoDialog,
@@ -167,7 +169,6 @@ from picard.ui.logview import (
     LogView,
 )
 from picard.ui.mainwindow.actions import create_actions
-from picard.ui.metadatabox import MetadataBox
 from picard.ui.newuserdialog import NewUserDialog
 from picard.ui.options.dialog import OptionsDialog
 from picard.ui.passworddialog import (
@@ -326,38 +327,45 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
         if IS_MACOS:
             self.setUnifiedTitleAndToolBarOnMac(True)
 
-        main_layout = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
-        main_layout.setObjectName('main_window_bottom_splitter')
-        main_layout.setChildrenCollapsible(False)
-        main_layout.setContentsMargins(0, 0, 0, 0)
+        self.workspace_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        self.workspace_splitter.setObjectName('dlmtags_sidebar_content_splitter')
+        self.workspace_splitter.setChildrenCollapsible(False)
+        self.workspace_splitter.setContentsMargins(0, 0, 0, 0)
 
-        self.panel = MainPanel(self, main_layout)
+        # Preserve the stock trees and TreeItems for backend/plugin compatibility.
+        # Keep them outside the visible splitters and retain their signal wiring.
+        self.panel = MainPanel(self, self)
         self.panel.setObjectName('main_panel_splitter')
-        self.file_browser = FileBrowser(parent=self.panel)
-        if not self.action_is_checked(MainAction.SHOW_FILE_BROWSER):
-            self.file_browser.hide()
-        self.panel.insertWidget(0, self.file_browser)
+        self.panel.hide()
+        self.file_sidebar = FileBrowserSidebar(self, parent=self.workspace_splitter)
+        self.file_browser = self.file_sidebar.bookmarks
+        self.workspace_splitter.addWidget(self.file_sidebar)
+        self.action_map[MainAction.SHOW_FILE_BROWSER].setChecked(True)
 
         self.log_dialog = LogView()
         self.history_dialog = HistoryView()
-
-        self.metadata_box = MetadataBox(parent=self)
+        self.metadata_box = StructuredMetadataBox(parent=self)
         self.cover_art_box = CoverArtBox(parent=self)
-        metadata_view_layout = QtWidgets.QHBoxLayout()
-        metadata_view_layout.setContentsMargins(0, 0, 0, 0)
-        metadata_view_layout.setSpacing(0)
-        metadata_view_layout.addWidget(self.metadata_box, 1)
-        metadata_view_layout.addWidget(self.cover_art_box, 0)
-        self.metadata_view = QtWidgets.QWidget()
-        self.metadata_view.setLayout(metadata_view_layout)
-
+        self.modern_workspace = DLMtagsWorkspace(self)
+        self.workspace_splitter.addWidget(self.modern_workspace)
+        self.workspace_splitter.setStretchFactor(0, 0)
+        self.workspace_splitter.setStretchFactor(1, 1)
+        self.workspace_splitter.setSizes([300, 900])
+        self.setCentralWidget(self.workspace_splitter)
+        self.action_map[MainAction.SHOW_METADATA_VIEW].setChecked(True)
         self.show_metadata_view()
         self.show_cover_art()
         self.show_filter_bars()
-
-        main_layout.addWidget(self.panel)
-        main_layout.addWidget(self.metadata_view)
-        self.setCentralWidget(main_layout)
+        self.menuBar().hide()
+        self.toolbar.hide()
+        self.search_toolbar.hide()
+        self.action_map[MainAction.SEARCH_TOOLBAR_TOGGLE].setVisible(False)
+        self.action_map[MainAction.SHOW_TOOLBAR].setVisible(False)
+        self.action_map[MainAction.SHOW_FILTERBAR].setVisible(False)
+        # Menu hiding must not disable existing window shortcuts.
+        for action in self.action_map.values():
+            if action is not None:
+                self.addAction(action)
 
         # accessibility
         self.set_tab_order()
@@ -635,7 +643,7 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
         config.persist['view_toolbar'] = self.action_is_checked(MainAction.SHOW_TOOLBAR)
         config.persist['view_filterbar'] = self.action_is_checked(MainAction.SHOW_FILTERBAR)
         config.persist['view_file_browser'] = self.action_is_checked(MainAction.SHOW_FILE_BROWSER)
-        self.file_browser.save_state()
+        self.file_sidebar.save_state()
         self.panel.save_state()
         self.metadata_box.save_state()
 
@@ -646,10 +654,12 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
         self.restore_geometry()
         if config.persist['window_maximized']:
             self.setWindowState(QtCore.Qt.WindowState.WindowMaximized)
-        splitters = config.persist['splitters_MainWindow']
-        if splitters is None or 'main_window_bottom_splitter' not in splitters:
-            self.centralWidget().setSizes([366, 194])
-        self.file_browser.restore_state()
+        # Ignore visibility restored from the retired toolbar workspace.
+        self.menuBar().hide()
+        self.toolbar.hide()
+        self.search_toolbar.hide()
+        self.panel.hide()
+        self.file_sidebar.restore_state()
 
     def _create_statusbar(self):
         """Creates a new status bar."""
@@ -714,6 +724,12 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
             self.listening_label.setVisible(False)
 
     def stop_network_requests(self):
+        # Invalidate fallback callbacks before aborting network requests.
+        for file in list(self.tagger.files.values()):
+            file.cancel_smart_genre()
+            file.cancel_tag_searches()
+            if file.smart_scan_stage is not None:
+                file.clear_lookup_task()
         self.tagger.webservice.stop_and_notify()
         # Finalize albums still loading (queued requests that never
         # started won't have their handlers called by stop_and_notify).
@@ -1271,31 +1287,13 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
         toolbar.addWidget(search_panel)
 
     def set_tab_order(self):
-        tab_order = self.setTabOrder
-        prev_action = None
-        current_action = None
-        # Setting toolbar widget tab-orders for accessibility
-        config = get_config()
-        for action_name in config.setting['toolbar_layout']:
-            if action_name not in {'-', 'separator'}:
-                try:
-                    action_id = MainAction(action_name)
-                    action = self.action_map[action_id]
-                    current_action = self.toolbar.widgetForAction(action)
-                except (ValueError, KeyError) as e:
-                    log.debug("Warning: Unknown action name '%s' found in config. Ignored. %s", action_name, e)
-
-            if prev_action is not None and prev_action != current_action:
-                tab_order(prev_action, current_action)
-
-            prev_action = current_action
-
-        tab_order(prev_action, self.search_combo)
-        tab_order(self.search_combo, self.search_edit)
-        tab_order(self.search_edit, self.search_button)
-        # Panels
-        tab_order(self.search_button, self.file_browser)
-        self.panel.tab_order(tab_order, self.file_browser, self.metadata_box)
+        widgets = (
+            self.file_sidebar.search, self.file_browser, self.file_sidebar.songs,
+            self.modern_workspace.tag_editor,
+            self.search_combo, self.search_edit, self.modern_workspace.results.table,
+        )
+        for before, after in zip(widgets, widgets[1:]):
+            self.setTabOrder(before, after)
 
     def _toggle_search(self):
         """Enable/disable the 'Search' action."""
@@ -1954,6 +1952,9 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
         if self.ignore_selection_changes:
             return
 
+        if hasattr(self, 'modern_workspace') and not self.modern_workspace.tag_editor.commit_pending():
+            return
+
         if objects is not None:
             self.selected_objects = objects
         else:
@@ -2059,27 +2060,26 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
     def show_cover_art(self):
         """Show/hide the cover art box."""
         show = self.action_is_checked(MainAction.SHOW_COVER_ART)
+        self.modern_workspace.artwork_panel.setVisible(show)
         self.cover_art_box.setVisible(show)
         if show:
             self.update_selection()
 
     def show_toolbar(self):
-        """Show/hide the Action toolbar."""
-        if self.action_is_checked(MainAction.SHOW_TOOLBAR):
-            self.toolbar.show()
-        else:
+        """The modern workspace owns visible action controls."""
+        if self.toolbar is not None:
             self.toolbar.hide()
 
     def show_file_browser(self):
         """Show/hide the file browser."""
         if self.action_is_checked(MainAction.SHOW_FILE_BROWSER):
-            sizes = self.panel.sizes()
+            sizes = self.workspace_splitter.sizes()
             if sizes[0] == 0:
                 sizes[0] = sum(sizes) // 4
-                self.panel.setSizes(sizes)
-            self.file_browser.show()
+                self.workspace_splitter.setSizes(sizes)
+            self.file_sidebar.show()
         else:
-            self.file_browser.hide()
+            self.file_sidebar.hide()
 
     def _show_password_dialog(self, reply, authenticator):
         config = get_config()

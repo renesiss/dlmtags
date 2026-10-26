@@ -20,6 +20,7 @@
 from PyQt6 import (
     QtCore,
     QtGui,
+    QtNetwork,
     QtWidgets,
 )
 
@@ -380,13 +381,127 @@ class CoverArtPage(SetupWizardPage):
         return providers
 
 
+
+class OnlineSourcesPage(SetupWizardPage):
+    """Optional background metadata sources, using the existing Picard settings."""
+
+    PROVIDERS = (
+        ('discogs', 'Discogs', 'dlmtags_discogs_enabled', 'dlmtags_discogs_token',
+         'https://www.discogs.com/settings/developers'),
+        ('lastfm', 'Last.fm', 'smart_genre_lastfm_enabled', 'lastfm_api_key',
+         'https://www.last.fm/api/account/create'),
+    )
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle(_('Online Music Sources'))
+        self.setSubTitle(_('Choose where DLMtags searches for missing music information.'))
+        layout = QtWidgets.QVBoxLayout(self)
+        info = WrappedLabel(_('MusicBrainz and AcoustID use the existing automatic recognition setup. '
+                              'Discogs and Last.fm are optional and require a personal API credential.'))
+        layout.addWidget(info)
+        self._network = QtNetwork.QNetworkAccessManager(self)
+        self._pending = {}
+        self._controls = {}
+        for provider, title, enabled_key, credential_key, url in self.PROVIDERS:
+            group = QtWidgets.QGroupBox(title, self)
+            form = QtWidgets.QFormLayout(group)
+            enabled = QtWidgets.QCheckBox(_('Use this source'), group)
+            form.addRow(enabled)
+            credential = QtWidgets.QLineEdit(group)
+            credential.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+            credential.setPlaceholderText(_('Paste your API token / key'))
+            form.addRow(_('API credential'), credential)
+            controls = QtWidgets.QHBoxLayout()
+            get_key = QtWidgets.QPushButton(_('Get key'), group)
+            get_key.clicked.connect(lambda _=False, link=url: QtGui.QDesktopServices.openUrl(QtCore.QUrl(link)))
+            check = QtWidgets.QPushButton(_('Test Connection'), group)
+            status = QtWidgets.QLabel(_('Setup required'), group)
+            controls.addWidget(get_key)
+            controls.addWidget(check)
+            controls.addWidget(status, 1)
+            form.addRow(controls)
+            check.clicked.connect(lambda _=False, name=provider: self._test_connection(name))
+            enabled.toggled.connect(lambda state, edit=credential, button=check: (edit.setEnabled(state), button.setEnabled(state)))
+            self._controls[provider] = (enabled, credential, check, status, enabled_key, credential_key)
+            layout.addWidget(group)
+        notice = WrappedLabel(_('Credentials are stored locally in Picard settings without encryption. '
+                                'You may skip these sources and connect them later.'))
+        layout.addWidget(notice)
+        layout.addStretch()
+
+    def initializePage(self):
+        config = get_config()
+        first_run = not config.persist['setup_wizard_completed']
+        for provider, (enabled, credential, _check, status, enabled_key, credential_key) in self._controls.items():
+            current_enabled = config.setting[enabled_key]
+            # Default opt-in only on first setup; never overwrite existing installations.
+            enabled.setChecked(True if first_run and not config.setting[credential_key] else current_enabled)
+            credential.setText(config.setting[credential_key])
+            status.setText(_('Ready to test') if credential.text().strip() else _('Setup required'))
+
+    def _test_connection(self, provider):
+        enabled, credential, button, status, _enabled_key, _credential_key = self._controls[provider]
+        token = credential.text().strip()
+        if not enabled.isChecked() or not token:
+            status.setText(_('Enter a key first'))
+            return
+        if provider == 'discogs':
+            request = QtNetwork.QNetworkRequest(QtCore.QUrl('https://api.discogs.com/oauth/identity'))
+            request.setRawHeader(b'Authorization', ('Discogs token=' + token).encode('utf-8'))
+            request.setRawHeader(b'User-Agent', b'DLMtags/1.0')
+        else:
+            query = QtCore.QUrlQuery()
+            for key, value in (('method', 'tag.getTopTags'), ('tag', 'rock'), ('api_key', token), ('format', 'json')):
+                query.addQueryItem(key, value)
+            url = QtCore.QUrl('https://ws.audioscrobbler.com/2.0/')
+            url.setQuery(query)
+            request = QtNetwork.QNetworkRequest(url)
+        request.setTransferTimeout(10000)
+        button.setEnabled(False)
+        status.setText(_('Testing…'))
+        reply = self._network.get(request)
+        self._pending[provider] = reply
+        reply.finished.connect(lambda name=provider, r=reply: self._test_finished(name, r))
+
+    def _test_finished(self, provider, reply):
+        if self._pending.get(provider) is not reply:
+            reply.deleteLater()
+            return
+        del self._pending[provider]
+        enabled, credential, button, status, _enabled_key, _credential_key = self._controls[provider]
+        button.setEnabled(enabled.isChecked())
+        http_status = reply.attribute(QtNetwork.QNetworkRequest.Attribute.HttpStatusCodeAttribute)
+        payload = bytes(reply.readAll())
+        import json
+        try:
+            data = json.loads(payload.decode('utf-8'))
+        except (ValueError, UnicodeError):
+            data = {}
+        if reply.error() != QtNetwork.QNetworkReply.NetworkError.NoError or http_status != 200:
+            status.setText(_('Connection failed'))
+        elif provider == 'lastfm' and ('error' in data or 'toptags' not in data):
+            status.setText(_('Invalid key / provider response'))
+        elif provider == 'discogs' and 'username' not in data:
+            status.setText(_('Invalid token / provider response'))
+        else:
+            status.setText(_('Connected'))
+        reply.deleteLater()
+
+    def save_settings(self, config):
+        for enabled, credential, _button, _status, enabled_key, credential_key in self._controls.values():
+            config.setting[enabled_key] = enabled.isChecked()
+            # Never clear an existing credential unintentionally.
+            config.setting[credential_key] = credential.text().strip()
+
+
 class UpdatesPage(SetupWizardPage):
     """Page for configuring update settings."""
 
     def __init__(self, parent: QtWidgets.QWizard | None = None):
         super().__init__(parent)
-        self.setTitle(_("Updates"))
-        self.setSubTitle(_("Choose how Picard should check for updates."))
+        self.setTitle(_("Ready to Use DLMtags"))
+        self.setSubTitle(_("Your music sources are configured. Select Finish to continue."))
         self.setPixmap(
             QtWidgets.QWizard.WizardPixmap.LogoPixmap,
             icontheme.lookup('plugin-update').pixmap(32, 32),
@@ -505,20 +620,98 @@ class MetadataPage(SetupWizardPage):
         config.setting['convert_punctuation'] = self.convert_punctuation_checkbox.is_checked()
 
 
+
+class TagDisplayPage(SetupWizardPage):
+    """Configure visible tags without changing stored metadata."""
+
+    TAGS = (
+        ('artist', 'Artist'),
+        ('title', 'Title'),
+        ('album', 'Album'),
+        ('albumartist', 'Album Artist'),
+        ('tracknumber', 'Track Number'),
+        ('discnumber', 'Disc Number'),
+        ('date', 'Year'),
+        ('genre', 'Genre'),
+        ('style', 'Style'),
+        ('bpm', 'BPM'),
+        ('~length', 'Duration'),
+        ('subtitle', 'Version/Mix'),
+        ('~rating', 'Rating'),
+        ('comment', 'Comment'),
+    )
+
+    RECOMMENDED = {
+        'artist', 'title', 'album', 'date', 'genre',
+        'style', 'bpm', '~length', 'subtitle'
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle('Tag Display')
+        self.setSubTitle('Choose which fields appear in Original Tags and New Tags.')
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        buttons = QtWidgets.QHBoxLayout()
+        for title, tags in (
+            ('Recommended', self.RECOMMENDED),
+            ('Select All', {key for key, _ in self.TAGS}),
+            ('Minimal', {'artist', 'title'}),
+        ):
+            button = QtWidgets.QPushButton(title)
+            button.clicked.connect(
+                lambda checked=False, selection=tags: self.select_tags(selection)
+            )
+            buttons.addWidget(button)
+        layout.addLayout(buttons)
+
+        container = QtWidgets.QWidget()
+        grid = QtWidgets.QGridLayout(container)
+        self.checks = {}
+
+        for index, (tag, label) in enumerate(self.TAGS):
+            check = QtWidgets.QCheckBox(label)
+            self.checks[tag] = check
+            grid.addWidget(check, index // 2, index % 2)
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(container)
+        layout.addWidget(scroll)
+
+        hint = QtWidgets.QLabel(
+            'Hidden tags are not deleted or modified. '
+            'This setting only changes their visibility.'
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+    def select_tags(self, selected):
+        for tag, check in self.checks.items():
+            check.setChecked(tag in selected)
+
+    def initializePage(self):
+        self.select_tags(set(get_config().setting['dlmtags_visible_tags']))
+
+    def save_settings(self, config):
+        config.setting['dlmtags_visible_tags'] = [
+            tag for tag, check in self.checks.items() if check.isChecked()
+        ]
+
 class SetupWizard(QtWidgets.QWizard):
     """First-run setup wizard for new Picard users."""
 
     PAGES: tuple[type[SetupWizardPage], ...] = (
         WelcomePage,
-        FileOrganizationPage,
-        CoverArtPage,
-        MetadataPage,
+        OnlineSourcesPage,
+        TagDisplayPage,
         UpdatesPage,
     )
 
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent)
-        self.setWindowTitle(_("Picard Setup"))
+        self.setWindowTitle(_("DLMtags Setup"))
         self.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
         self.setMinimumSize(640, 520)
         self.setOption(QtWidgets.QWizard.WizardOption.NoBackButtonOnStartPage)

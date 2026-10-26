@@ -22,6 +22,8 @@
 
 from typing import ClassVar
 
+from PyQt6 import QtWidgets
+
 from picard.config import get_config
 from picard.extension_points.options_pages import register_options_page
 from picard.i18n import (
@@ -83,6 +85,10 @@ class GenresOptionsPage(OptionsPage):
         'max_genres': {'widgets': ['max_genres']},
         'join_genres': {'widgets': ['join_genres']},
         'genres_filter': {'widgets': ['genres_filter']},
+        'dlmtags_discogs_enabled': {'widgets': ['dlmtags_discogs_enabled']},
+        'dlmtags_discogs_token': {'widgets': ['dlmtags_discogs_token']},
+        'smart_genre_lastfm_enabled': {'widgets': ['smart_genre_lastfm_enabled']},
+        'lastfm_api_key': {'widgets': ['lastfm_api_key']},
     }
 
     def __init__(self, parent=None):
@@ -103,9 +109,35 @@ class GenresOptionsPage(OptionsPage):
         )
         self.ui.verticalLayout.addWidget(self.playground)
         self.playground.textChanged.connect(self.update_test_genres_filter)
+        providers = QtWidgets.QGroupBox(_('Optional metadata providers'), self)
+        form = QtWidgets.QFormLayout(providers)
+        for option, label in (
+            ('dlmtags_discogs_enabled', _('Enable Discogs')),
+            ('smart_genre_lastfm_enabled', _('Enable Last.fm')),
+        ):
+            widget = QtWidgets.QCheckBox(label, providers)
+            setattr(self.ui, option, widget)
+            form.addRow(widget)
+        for option, label in (
+            ('dlmtags_discogs_token', _('Discogs Personal Access Token')),
+            ('lastfm_api_key', _('Last.fm API Key')),
+        ):
+            widget = QtWidgets.QLineEdit(providers)
+            widget.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+            setattr(self.ui, option, widget)
+            form.addRow(label, widget)
+        notice = QtWidgets.QLabel(_('Credentials are stored locally in Picard settings without encryption. '
+                                   'Missing credentials disable only that provider.'), providers)
+        notice.setWordWrap(True)
+        form.addRow(notice)
+        self.ui.verticalLayout.addWidget(providers)
 
     def load(self):
         config = get_config()
+        for option in ('dlmtags_discogs_enabled', 'smart_genre_lastfm_enabled'):
+            getattr(self.ui, option).setChecked(config.setting[option])
+        for option in ('dlmtags_discogs_token', 'lastfm_api_key'):
+            getattr(self.ui, option).setText(config.setting[option])
         self.ui.use_genres.setChecked(config.setting['use_genres'])
         self.ui.max_genres.setValue(config.setting["max_genres"])
         self.ui.min_genre_usage.setValue(config.setting["min_genre_usage"])
@@ -117,6 +149,10 @@ class GenresOptionsPage(OptionsPage):
 
     def save(self):
         config = get_config()
+        for option in ('dlmtags_discogs_enabled', 'smart_genre_lastfm_enabled'):
+            config.setting[option] = getattr(self.ui, option).isChecked()
+        for option in ('dlmtags_discogs_token', 'lastfm_api_key'):
+            config.setting[option] = getattr(self.ui, option).text().strip()
         config.setting['use_genres'] = self.ui.use_genres.isChecked()
         config.setting['max_genres'] = self.ui.max_genres.value()
         config.setting['min_genre_usage'] = self.ui.min_genre_usage.value()

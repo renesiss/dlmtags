@@ -43,6 +43,21 @@ from picard.env import parse_bool_env
 from picard.ui.theme_detect import get_linux_dark_mode_strategies
 
 
+# Semantic aliases only: actual colors remain owned by the Picard palette.
+# DLMtags components must not set a second application palette or accent.
+DLMTAGS_COLOR_ROLES = {
+    'sidebar': QtGui.QPalette.ColorRole.AlternateBase,
+    'panel': QtGui.QPalette.ColorRole.Base,
+    'text': QtGui.QPalette.ColorRole.Text,
+    'secondary_text': QtGui.QPalette.ColorRole.PlaceholderText,
+    'border': QtGui.QPalette.ColorRole.Mid,
+    'hover': QtGui.QPalette.ColorRole.AlternateBase,
+    'selection': QtGui.QPalette.ColorRole.Highlight,
+    'selection_text': QtGui.QPalette.ColorRole.HighlightedText,
+    'shadow': QtGui.QPalette.ColorRole.Shadow,
+}
+
+
 # DRY: Common dark background color
 DARK_BG_COLOR = QtGui.QColor(51, 51, 51)
 

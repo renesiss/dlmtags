@@ -72,6 +72,7 @@ from picard.item import (
     MetadataItem,
 )
 from picard.mbjson import recording_to_metadata
+from picard.tagprovenance import set_source
 from picard.metadata import (
     Metadata,
     MultiMetadataProxy,
@@ -153,6 +154,7 @@ class Track(FileListItem):
         super().__init__(track_id)
         self.album = album
         self.scripted_metadata = Metadata()
+        self._musicbrainz_source_metadata = Metadata()
         self._track_artists: list = []
         self._orig_images = None
         self._iter_children_items_metadata_ignore_attrs = {'orig_metadata'}
@@ -213,7 +215,14 @@ class Track(FileListItem):
         # Per-file "never replace" filters are applied later, at tag-save time
         # (see ImageList.to_be_saved_to_tags), so external file saving is unaffected.
         metadata.images = self.metadata.images
+        previous = {tag: file.metadata.getall(tag) for tag in self._musicbrainz_source_metadata}
         file.copy_metadata(metadata)
+        for tag, values in self._musicbrainz_source_metadata.rawitems():
+            if (
+                not tag.startswith('~') and values and previous[tag] != list(values)
+                and file.metadata.getall(tag) == list(values) and tag not in file._manually_edited_tags
+            ):
+                set_source(file, tag, 'MusicBrainz')
         file.update(signal=False)
         self.update()
 
@@ -501,6 +510,8 @@ class NonAlbumTrack(Track):
     def _parse_recording(self, recording):
         m = self.metadata
         recording_to_metadata(recording, m, self)
+        self._musicbrainz_source_metadata = Metadata()
+        recording_to_metadata(recording, self._musicbrainz_source_metadata)
         self._customize_metadata()
         run_track_metadata_processors(self, m, recording)
         self.orig_metadata.copy(m)

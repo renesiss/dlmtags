@@ -59,6 +59,7 @@ from picard.i18n import (
     ngettext,
 )
 from picard.metadata import MULTI_VALUED_JOINER
+from picard.tagprovenance import set_source
 from picard.script.parser import ScriptError
 from picard.tags import display_tag_name
 from picard.tags.docs import display_tag_tooltip
@@ -863,7 +864,11 @@ class MetadataBox(QtWidgets.QTableWidget):
             if values == [""] or not values:
                 if not self._tag_is_removable(tag):
                     return
-            yield from apply_tag_values(objects, tag, values)
+            for obj in apply_tag_values(objects, tag, values):
+                if isinstance(obj, File):
+                    obj._manually_edited_tags.add(tag)
+                    set_source(obj, tag, 'Manual')
+                yield obj
 
     def _update_objects(self, objects):
         for obj in set(objects):
@@ -928,6 +933,11 @@ class MetadataBox(QtWidgets.QTableWidget):
 
     @throttle(100)
     def update(self, drop_album_caches=False):
+        self._update_metadata(drop_album_caches)
+
+    def _update_metadata(self, drop_album_caches=False):
+        self._update_generation = getattr(self, '_update_generation', 0) + 1
+        generation = self._update_generation
         new_selection = self.selection_dirty
         if self.editing or (self.ignore_updates and not new_selection):
             return
@@ -943,9 +953,14 @@ class MetadataBox(QtWidgets.QTableWidget):
             removed_bg=interface_colors.get_color_css_rgba('tagstatus_removed', alpha=diff_alpha),
             added_bg=interface_colors.get_color_css_rgba('tagstatus_added', alpha=diff_alpha),
         )
+
+        def apply_latest(result=None, error=None):
+            if generation == self._update_generation:
+                self._update_items(result, error)
+
         thread.run_task(
             partial(self._update_tags, new_selection, drop_album_caches, diff_colors),
-            self._update_items,
+            apply_latest,
             thread_pool=self.tagger.priority_thread_pool,
         )
 

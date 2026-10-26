@@ -133,6 +133,8 @@ Option('persist', 'artistsearchdialog_header_state', QtCore.QByteArray())
 Option('persist', 'cdlookupdialog_header_state', QtCore.QByteArray())
 TextOption('persist', 'current_browser_path', DEFAULT_CURRENT_BROWSER_PATH)
 TextOption('persist', 'current_directory', "")
+# JSON preserves bookmark labels and paths together; an empty list stays empty.
+TextOption('persist', 'dlmtags_bookmarks', '')
 Option('persist', 'file_view_header_columns', {})
 BoolOption('persist', 'file_view_header_locked', False)
 ListOption('persist', 'filters_AlbumTreeView', DEFAULT_FILTER_COLUMNS)
@@ -431,6 +433,8 @@ BoolOption(
     'setting', 'itunes_compatible_grouping', False, title=N_("iTunes compatible grouping / work"), in_profile=True
 )
 TextOption('setting', 'join_genres', '', title=N_("Join multiple genres with"), in_profile=True)
+# Optional Last.fm fallback uses only a configured key; never share it in profiles.
+TextOption('setting', 'lastfm_api_key', '', shareable=False)
 ListOption('setting', 'list_of_scripts', [], title=N_("Tagger scripts"), in_profile=True)
 BoolOption(
     'setting', 'listenbrainz_enabled', False, title=N_('Enable ListenBrainz listen submissions'), in_profile=True
@@ -612,6 +616,16 @@ BoolOption('setting', 'show_cover_art_details_mimetype', True, title=N_("Show co
 BoolOption('setting', 'show_cover_art_details_type', False, title=N_("Show cover art type"), in_profile=True)
 BoolOption('setting', 'show_menu_icons', DEFAULT_SHOW_MENU_ICONS, title=N_("Show icons in menus"), in_profile=True)
 BoolOption('setting', 'show_new_user_dialog', True, title=N_("Show warning when Picard starts"), in_profile=True)
+# DLMtags: optional per-user Discogs access; never distribute tokens.
+TextOption('setting', 'dlmtags_discogs_token', '', shareable=False)
+ListOption(
+    'setting', 'dlmtags_visible_tags',
+    ['artist', 'title', 'album', 'date', 'genre',
+     'style', 'bpm', '~length', 'subtitle'],
+    title=N_('DLMtags visible editor fields'),
+)
+BoolOption('setting', 'dlmtags_discogs_enabled', False)
+BoolOption('setting', 'smart_genre_lastfm_enabled', False)
 Option(
     'setting',
     'standardize_artist_names',
@@ -667,7 +681,8 @@ TextOption('setting', 'ui_theme', DEFAULT_THEME_NAME, title=N_("User interface c
 IntOption('setting', 'update_check_days', 7, title=N_("Days between update checks"), in_profile=True, bounds=(1, None))
 IntOption('setting', 'update_level', DEFAULT_PROGRAM_UPDATE_LEVEL, title=N_("Update types to check"), in_profile=True)
 BoolOption('setting', 'use_adv_search_syntax', False, title=N_("Use advanced search syntax"), in_profile=True)
-BoolOption('setting', 'use_genres', False, title=N_("Use genres from MusicBrainz"), in_profile=True)
+# DLMtags default; explicitly stored and profile preferences still take precedence.
+BoolOption('setting', 'use_genres', True, title=N_("Use genres from MusicBrainz"), in_profile=True)
 BoolOption('setting', 'use_proxy', False, title=N_("Use a web proxy server"), in_profile=True)
 BoolOption('setting', 'use_server_for_submission', False, title=N_("Submit to configured server"), in_profile=True)
 TextOption('setting', 'va_name', "Various Artists", title=N_("Various Artists name"), in_profile=True)

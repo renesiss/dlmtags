@@ -34,6 +34,7 @@ from picard.config import get_config
 from picard.i18n import gettext as _
 from picard.script.parser import normalize_tagname
 from picard.tags import display_tag_name
+from picard.tagprovenance import set_source
 
 from picard.ui import PicardDialog
 from picard.ui.forms.ui_tagsfromfilenames import Ui_TagsFromFileNamesDialog
@@ -153,6 +154,8 @@ class TagsFromFileNamesDialog(PicardDialog):
         for file in self.files:
             metadata = expression.match_file(file.filename)
             file.metadata.update(metadata)
+            for tag in metadata:
+                set_source(file, tag, 'Filename')
             file.update()
         config = get_config()
         config.persist['tags_from_filenames_format'] = self.ui.format.currentText()

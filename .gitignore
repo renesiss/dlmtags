@@ -85,3 +85,9 @@ test-registry.json
 .github/copilot*
 .copilot/
 .claude/
+
+# Local editor/manual backup copies
+*.bak
+*.bak-*
+*.backup
+*.backup-*
