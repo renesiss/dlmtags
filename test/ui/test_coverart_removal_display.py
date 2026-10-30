@@ -35,6 +35,8 @@ from picard.util.lrucache import LRUCache
 
 import pytest
 
+import picard.resources  # noqa: F401  # Register the bundled Artwork placeholder.
+
 from picard.ui.coverartbox import CoverArtBox
 from picard.ui.infodialog.dialog import ArtworkRow
 
@@ -161,6 +163,28 @@ def test_thumbnail_removal_overlay_kept_on_new_data(thumbnail) -> None:
 
     thumbnail.set_marked_for_removal(False)
     assert thumbnail.pixmap().toImage() != marked
+
+
+def test_artwork_box_uses_dlmtags_placeholder_only_without_art(qapp, monkeypatch) -> None:
+    mock_tagger = MagicMock()
+    mock_tagger.primaryScreen.return_value.devicePixelRatio.return_value = 1.0
+    monkeypatch.setattr('picard.ui.coverartbox.tagger_instance', lambda: mock_tagger)
+    monkeypatch.setattr('picard.ui.coverartbox.coverartthumbnail.tagger_instance', lambda: mock_tagger)
+    monkeypatch.setattr(type(get_config().setting), 'setting_changed', MagicMock(), raising=False)
+    box = CoverArtBox()
+    expected = QtGui.QPixmap(':/images/dlmtags-artwork-default.png').scaled(
+        128, 128, QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation
+    )
+    assert not expected.isNull()
+    assert box.cover_art.alignment() == QtCore.Qt.AlignmentFlag.AlignCenter
+    assert box.cover_art.data is None
+    assert box.cover_art.pixmap().toImage() == expected.toImage()
+    box.cover_art.set_data([FakeImage(_png_bytes())], force=True)
+    assert box.cover_art.pixmap().toImage() != expected.toImage()
+    box.cover_art.set_data(None, force=True)
+    assert box.cover_art.data is None
+    assert box.cover_art.pixmap().toImage() == expected.toImage()
+    box.deleteLater()
 
 
 # --- CoverArtBox marking logic -----------------------------------------------

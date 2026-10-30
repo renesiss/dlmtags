@@ -39,6 +39,8 @@ from picard.ui.dlmtags.sidebar_style import (
 class FileBrowserSidebar(QtWidgets.QWidget):
     """One navigation pane; no matching, tag editing or disk-writing logic."""
 
+    selected_songs_changed = QtCore.pyqtSignal()
+
     def __init__(self, window, parent=None):
         super().__init__(parent)
         self._window = window
@@ -160,7 +162,12 @@ class FileBrowserSidebar(QtWidgets.QWidget):
         self.search.textChanged.connect(self.song_filter.setFilterFixedString)
         self.search.returnPressed.connect(self._search_path)
         self.songs.doubleClicked.connect(self._open_entry)
-        self.songs.selectionModel().currentChanged.connect(self._song_selected)
+        selection_model = self.songs.selectionModel()
+        assert selection_model is not None
+        selection_model.currentChanged.connect(self._song_selected)
+        selection_model.selectionChanged.connect(self._songs_selection_changed)
+        self.song_model.rowsRemoved.connect(self.selected_songs_changed)
+        self.song_model.modelReset.connect(self.selected_songs_changed)
         load = QtGui.QAction(_('Load selected files'), self.songs)
         load.triggered.connect(self._load_songs)
         self.songs.addAction(load)
@@ -195,7 +202,8 @@ class FileBrowserSidebar(QtWidgets.QWidget):
         return 'bookmark'
 
     def _refresh_icons(self):
-        self._browse_action.setIcon(sidebar_icon(self.card, 'browse'))
+        choose_folder_icon = os.path.join(os.path.dirname(__file__), 'icons', 'choose_folder.svg')
+        self._browse_action.setIcon(QtGui.QIcon(choose_folder_icon))
         self._add_action.setIcon(sidebar_icon(self.card, 'add'))
         self._search_icon_action.setIcon(sidebar_icon(self.search, 'search'))
         self._up_action.setIcon(sidebar_icon(self.card, 'up'))
@@ -206,9 +214,7 @@ class FileBrowserSidebar(QtWidgets.QWidget):
                 item.setIcon(self.folder_media.folder_icon)
         for row in range(self.bookmarks.count()):
             item = self.bookmarks.item(row)
-            item.setIcon(sidebar_icon(
-                self.bookmarks, self._bookmark_icon(item.data(QtCore.Qt.ItemDataRole.UserRole))
-            ))
+            item.setIcon(sidebar_icon(self.bookmarks, self._bookmark_icon(item.data(QtCore.Qt.ItemDataRole.UserRole))))
 
     def changeEvent(self, event):
         super().changeEvent(event)
@@ -231,7 +237,8 @@ class FileBrowserSidebar(QtWidgets.QWidget):
     def _update_song_filters(self):
         if self._folder:
             self.folder_media.set_folder(
-                self._folder, self._tagger.format_registry.supported_extensions(),
+                self._folder,
+                self._tagger.format_registry.supported_extensions(),
                 get_config().persist['show_hidden_files'],
             )
 
@@ -256,10 +263,18 @@ class FileBrowserSidebar(QtWidgets.QWidget):
                 pass
         if not isinstance(entries, list):
             entries = [
-                {'name': _('Music'), 'path': QtCore.QStandardPaths.writableLocation(
-                    QtCore.QStandardPaths.StandardLocation.MusicLocation)},
-                {'name': _('Videos'), 'path': QtCore.QStandardPaths.writableLocation(
-                    QtCore.QStandardPaths.StandardLocation.MoviesLocation)},
+                {
+                    'name': _('Music'),
+                    'path': QtCore.QStandardPaths.writableLocation(
+                        QtCore.QStandardPaths.StandardLocation.MusicLocation
+                    ),
+                },
+                {
+                    'name': _('Videos'),
+                    'path': QtCore.QStandardPaths.writableLocation(
+                        QtCore.QStandardPaths.StandardLocation.MoviesLocation
+                    ),
+                },
             ]
         seen = set()
         for entry in entries:
@@ -354,9 +369,7 @@ class FileBrowserSidebar(QtWidgets.QWidget):
         remove = menu.addAction(_('Remove'))
         chosen = menu.exec(self.bookmarks.viewport().mapToGlobal(position))
         if chosen == rename:
-            name, accepted = QtWidgets.QInputDialog.getText(
-                self, _('Rename bookmark'), _('Name'), text=item.text()
-            )
+            name, accepted = QtWidgets.QInputDialog.getText(self, _('Rename bookmark'), _('Name'), text=item.text())
             if accepted and name.strip():
                 item.setText(name.strip())
                 self._save_bookmarks()
@@ -397,8 +410,13 @@ class FileBrowserSidebar(QtWidgets.QWidget):
         return [
             self.song_filter.mapToSource(index).siblingAtColumn(1).data(QtCore.Qt.ItemDataRole.UserRole)
             for index in self.songs.selectionModel().selectedRows(0)
-            if not self.song_filter.mapToSource(index).siblingAtColumn(1).data(QtCore.Qt.ItemDataRole.UserRole + 1)
+            if self.song_filter.mapToSource(index).siblingAtColumn(1).data(QtCore.Qt.ItemDataRole.UserRole)
+            and not self.song_filter.mapToSource(index).siblingAtColumn(1).data(QtCore.Qt.ItemDataRole.UserRole + 1)
         ]
+
+    def _songs_selection_changed(self, *_args):
+        self._window._dlmtags_bulk_selection_source = 'songs' if self._selected_paths() else 'picard'
+        self.selected_songs_changed.emit()
 
     def _load_songs(self, *args):
         paths = self._selected_paths()
@@ -457,6 +475,7 @@ class FileBrowserSidebar(QtWidgets.QWidget):
             return
         self._selection_timer.stop()
         self._window.panel.select_object(file)
+        self._window._dlmtags_bulk_selection_source = 'songs'
         if file.has_error():
             self._song_status_changed(_('Unable to read metadata: %s') % '; '.join(str(error) for error in file.errors))
         else:

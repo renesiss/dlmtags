@@ -13,8 +13,10 @@ plugins) and adds a new single-window UI and a simplified scan-and-tag workflow.
 
 DLMtags is based on MusicBrainz Picard, © the Picard developers and
 contributors (see [AUTHORS.txt](AUTHORS.txt) and the Git history). This
-repository keeps Picard's full Git history. DLMtags changes start after upstream
-commit `84862c534` (Picard `master`, October 2026).
+migration preserves the DLMtags commit and its upstream base commit, while the
+older upstream Git history remains available from the original Picard project.
+DLMtags changes start after upstream commit `84862c534` (Picard `master`,
+October 2026).
 
 DLMtags is **not** affiliated with or endorsed by MetaBrainz or the Picard
 project. Please report DLMtags problems in this repository, not to the Picard

@@ -3521,6 +3521,51 @@ msgstr ""
 msgid "New User Warning"
 msgstr ""
 
+#: picard/ui/dlmtags/welcome.py
+msgid "Protect your music library"
+msgstr ""
+
+#: picard/ui/dlmtags/welcome.py
+msgid "Saving changes in DLMtags can overwrite existing metadata and, depending on your settings, modify filenames."
+msgstr ""
+
+#: picard/ui/dlmtags/welcome.py
+msgid "We recommend:"
+msgstr ""
+
+#: picard/ui/dlmtags/welcome.py
+msgid "Backing up your music before making bulk changes."
+msgstr ""
+
+#: picard/ui/dlmtags/welcome.py
+msgid "Reviewing proposed tags before confirming."
+msgstr ""
+
+#: picard/ui/dlmtags/welcome.py
+msgid "Testing with a small number of copied files first."
+msgstr ""
+
+#: picard/ui/dlmtags/welcome.py
+msgid "DLMtags is free, open-source software based on MusicBrainz Picard and is provided without warranty."
+msgstr ""
+
+#: picard/ui/dlmtags/welcome.py
+msgid "DLMtags logo"
+msgstr ""
+
+#: picard/ui/dlmtags/welcome.py
+#, python-format
+msgid "Recommendation %d"
+msgstr ""
+
+#: picard/ui/dlmtags/welcome.py
+msgid "Don't show again"
+msgstr ""
+
+#: picard/ui/dlmtags/welcome.py
+msgid "Continue"
+msgstr ""
+
 #: picard/ui/passworddialog.py:40
 #, python-format
 msgid ""

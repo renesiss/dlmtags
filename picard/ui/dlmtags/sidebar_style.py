@@ -79,16 +79,20 @@ SVG_PATHS = {
     'folder': '<path d="M3 7V5h6l2 2h10v13H3Z"/>',
     'up': '<path d="M12 20V4m-6 6 6-6 6 6"/>',
     'music': '<path d="M9 18V5l11-2v13M9 8l11-2"/><ellipse cx="6" cy="18" rx="3" ry="2"/>'
-             '<ellipse cx="17" cy="16" rx="3" ry="2"/>',
+    '<ellipse cx="17" cy="16" rx="3" ry="2"/>',
     'video': '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3Z"/>',
     'bookmark': '<path d="M6 4h12v17l-6-4-6 4Z"/>',
     'browse': '<rect x="3" y="3" width="7" height="7" rx="1"/>'
-              '<rect x="14" y="3" width="7" height="7" rx="1"/>'
-              '<rect x="3" y="14" width="7" height="7" rx="1"/>'
-              '<rect x="14" y="14" width="7" height="7" rx="1"/>',
+    '<rect x="14" y="3" width="7" height="7" rx="1"/>'
+    '<rect x="3" y="14" width="7" height="7" rx="1"/>'
+    '<rect x="14" y="14" width="7" height="7" rx="1"/>',
     'add': '<path d="M12 5v14M5 12h14"/>',
     'search': '<circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/>',
     'external': '<path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"/>',
+    'check-circle': '<circle cx="12" cy="12" r="9"/><path d="m7.5 12 3 3 6-6"/>',
+    'x-circle': '<circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/>',
+    'double-check': '<path d="m2 12 4 4 7-8m-3 8 3 3 9-11"/>',
+    'x': '<path d="M5 5 19 19M19 5 5 19"/>',
 }
 
 
@@ -99,7 +103,7 @@ def style_sidebar(widget, component):
     return facade
 
 
-def sidebar_icon(widget, name):
+def sidebar_icon(widget, name, tint=None):
     """Render symbolic SVGs for normal/selected/disabled states and current DPI."""
     icon = QtGui.QIcon()
     palette = widget.palette()
@@ -110,7 +114,8 @@ def sidebar_icon(widget, name):
         (QtGui.QIcon.Mode.Selected, palette.currentColorGroup(), QtGui.QPalette.ColorRole.HighlightedText),
         (QtGui.QIcon.Mode.Disabled, QtGui.QPalette.ColorGroup.Disabled, QtGui.QPalette.ColorRole.Text),
     ):
-        color = palette.color(group, role).name()
+        stroke = tint if tint is not None and mode != QtGui.QIcon.Mode.Disabled else palette.color(group, role)
+        color = stroke.name()
         svg = (
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
             f'fill="none" stroke="{color}" stroke-width="1.6" stroke-linecap="round" '
@@ -120,8 +125,10 @@ def sidebar_icon(widget, name):
         # Use Qt's SVG image plugin without requiring the optional QtSvg binding.
         if pixmap.loadFromData(svg.encode(), 'SVG'):
             pixmap = pixmap.scaled(
-                round(size * ratio), round(size * ratio),
-                QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation,
+                round(size * ratio),
+                round(size * ratio),
+                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
             )
             pixmap.setDevicePixelRatio(ratio)
             icon.addPixmap(pixmap, mode)
@@ -132,7 +139,7 @@ def sidebar_icon(widget, name):
         painter = QtGui.QPainter(pixmap)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         painter.scale(size / 24, size / 24)
-        painter.setPen(QtGui.QPen(palette.color(group, role), 1.6))
+        painter.setPen(QtGui.QPen(stroke, 1.6))
         _paint_symbol(painter, name)
         painter.end()
         icon.addPixmap(pixmap, mode)
@@ -187,6 +194,29 @@ def _paint_symbol(painter, name):
     elif name == 'browse':
         for x, y in ((3, 3), (14, 3), (3, 14), (14, 14)):
             path.addRoundedRect(QtCore.QRectF(x, y, 7, 7), 1, 1)
+    elif name in {'check-circle', 'x-circle'}:
+        path.addEllipse(QtCore.QRectF(3, 3, 18, 18))
+        if name == 'check-circle':
+            path.moveTo(7.5, 12)
+            path.lineTo(10.5, 15)
+            path.lineTo(16.5, 9)
+        else:
+            path.moveTo(9, 9)
+            path.lineTo(15, 15)
+            path.moveTo(15, 9)
+            path.lineTo(9, 15)
+    elif name == 'double-check':
+        path.moveTo(2, 12)
+        path.lineTo(6, 16)
+        path.lineTo(13, 8)
+        path.moveTo(10, 16)
+        path.lineTo(13, 19)
+        path.lineTo(22, 8)
+    elif name == 'x':
+        path.moveTo(5, 5)
+        path.lineTo(19, 19)
+        path.moveTo(19, 5)
+        path.lineTo(5, 19)
     else:
         path.moveTo(6, 4)
         for x, y in ((18, 4), (18, 21), (12, 17), (6, 21)):

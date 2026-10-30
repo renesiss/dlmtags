@@ -34,10 +34,21 @@ from picard.ui.metadatabox.edittagdialog import EditTagDialog
 
 # Labels are presentation aliases; values remain native Picard metadata keys.
 PRIMARY_FIELDS = (
-    ('artist', N_('Artist')), ('title', N_('Title')), ('album', N_('Album')),
-    ('albumartist', N_('Album Artist')), ('tracknumber', N_('Track')), ('discnumber', N_('Disc')),
-    ('date', N_('Year')), ('genre', N_('Genre')), ('style', N_('Style')), ('~rating', N_('Rating')),
-    ('bpm', N_('BPM')), ('~length', N_('Duration')), ('subtitle', N_('Version/Mix')), ('comment', N_('Comment')),
+    ('title', N_('Title')),
+    ('artist', N_('Artist')),
+    ('album', N_('Album')),
+    ('albumartist', N_('Album Artist')),
+    ('tracknumber', N_('Track')),
+    ('discnumber', N_('Disc')),
+    ('date', N_('Year')),
+    ('genre', N_('Genre')),
+    ('composer', N_('Composer')),
+    ('style', N_('Style')),
+    ('~rating', N_('Rating')),
+    ('bpm', N_('BPM')),
+    ('~length', N_('Duration')),
+    ('subtitle', N_('Version/Mix')),
+    ('comment', N_('Comment')),
 )
 PRIMARY_TAGS = tuple(tag for tag, label in PRIMARY_FIELDS)
 
@@ -106,7 +117,9 @@ class StructuredMetadataBox(MetadataBox):
     def _configure_columns(self):
         header = self.horizontalHeader()
         header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Fixed)
-        width = max(self.fontMetrics().horizontalAdvance(_(label)) for tag, label in PRIMARY_FIELDS) + EDITOR_FIELD_PADDING
+        width = (
+            max(self.fontMetrics().horizontalAdvance(_(label)) for tag, label in PRIMARY_FIELDS) + EDITOR_FIELD_PADDING
+        )
         self.setColumnWidth(0, width)
         for column in (1, 2):
             header.setSectionResizeMode(column, QtWidgets.QHeaderView.ResizeMode.Stretch)
@@ -122,13 +135,20 @@ class StructuredMetadataBox(MetadataBox):
             actual = set(old) | set(new)
             for tag in actual | set(PRIMARY_TAGS):
                 # The superclass already collected supported writable fields.
-                if tag in {'~length', '~filepath'} or (tag in actual and not tag.startswith('~')
-                                                       and file.supports_tag(tag)):
+                if tag in {'~length', '~filepath'} or (
+                    tag in actual and not tag.startswith('~') and file.supports_tag(tag)
+                ):
                     continue
                 readonly = (tag != '~rating' and tag.startswith('~')) or not file.supports_tag(tag)
-                tag_diff.add(tag, old=old.getall(tag), new=new.getall(tag),
-                             removed=tag in new.deleted_tags, readonly=readonly, removable=not readonly,
-                             top_tags=set(PRIMARY_TAGS))
+                tag_diff.add(
+                    tag,
+                    old=old.getall(tag),
+                    new=new.getall(tag),
+                    removed=tag in new.deleted_tags,
+                    readonly=readonly,
+                    removable=not readonly,
+                    top_tags=set(PRIMARY_TAGS),
+                )
 
     def _writable(self, tag):
         if tag.startswith('~') and tag != '~rating':
@@ -152,7 +172,7 @@ class StructuredMetadataBox(MetadataBox):
         self.setEnabled(active)
         if not active:
             self.setRowCount(len(PRIMARY_FIELDS))
-            for row, (tag, label) in enumerate(PRIMARY_FIELDS):
+            for row, (_tag, label) in enumerate(PRIMARY_FIELDS):
                 for column, value in enumerate((_(label), '', '')):
                     item = QtWidgets.QTableWidgetItem(value)
                     item.setFlags(QtCore.Qt.ItemFlag.NoItemFlags)
@@ -168,7 +188,7 @@ class StructuredMetadataBox(MetadataBox):
             for column in (self.COLUMN_ORIG, self.COLUMN_NEW):
                 self.item(row, column).setToolTip(self.item(row, column).text())
             self.setRowHeight(row, max(EDITOR_ROW_HEIGHT, self.fontMetrics().height() + 8))
-        for row, (tag, label) in enumerate(PRIMARY_FIELDS):
+        for row, (_tag, label) in enumerate(PRIMARY_FIELDS):
             self.item(row, self.COLUMN_TAG).setText(_(label))
         self._display_rating()
         self._display_duration()
@@ -213,7 +233,9 @@ class StructuredMetadataBox(MetadataBox):
 
     def _validate_values(self, tag, values):
         if not self._writable(tag):
-            QtWidgets.QMessageBox.information(self, _('Read-only field'), _('This field cannot be written for the selected files.'))
+            QtWidgets.QMessageBox.information(
+                self, _('Read-only field'), _('This field cannot be written for the selected files.')
+            )
             return False
         try:
             for value in values:
@@ -222,7 +244,9 @@ class StructuredMetadataBox(MetadataBox):
                 if value and tag == '~rating' and (not value.isdigit() or not 0 <= int(value) < RATING_STEPS):
                     raise ValueError
         except (InvalidOperation, ValueError):
-            QtWidgets.QMessageBox.information(self, _('Invalid value'), _('Enter a valid non-negative BPM or a rating from 0 to 5.'))
+            QtWidgets.QMessageBox.information(
+                self, _('Invalid value'), _('Enter a valid non-negative BPM or a rating from 0 to 5.')
+            )
             return False
         return True
 

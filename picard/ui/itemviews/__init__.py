@@ -297,6 +297,7 @@ class MainPanel(QtWidgets.QSplitter):
         load_match_icons()
 
     def _update_selection(self, selected_view):
+        self.window._dlmtags_bulk_selection_source = 'picard'
         for view in self._views:
             if view != selected_view:
                 view.clearSelection()

@@ -103,7 +103,6 @@ from picard.matching import (
 )
 from picard.mbjson import recording_to_metadata
 from picard.metadata import Metadata
-from picard.tagprovenance import set_source
 from picard.plugin import PluginFunctions
 from picard.script import get_file_naming_script
 from picard.smartgenre import SmartGenreRequest
@@ -126,7 +125,7 @@ from picard.smartscan import (
     restore_protected,
     tag_suggestions,
 )
-from picard.tagsearch import TagSearchRequest
+from picard.tagprovenance import set_source
 from picard.tags import (
     ALL_TAGS,
     calculated_tag_names,
@@ -134,6 +133,7 @@ from picard.tags import (
     preserved_tag_names,
 )
 from picard.tags.preserved import UserPreservedTags
+from picard.tagsearch import TagSearchRequest
 from picard.util import (
     any_exception_isinstance,
     bytes2human,
@@ -257,6 +257,7 @@ class FileIdentity:
 
 class File(MetadataItem):
     metadata_updated = pyqtSignal()
+    save_finished = pyqtSignal(bool)  # Emitted on the UI thread after the save callback finishes.
 
     NAME: str | None = None
     # Logical tag format key and description for the family of this handler.
@@ -310,6 +311,7 @@ class File(MetadataItem):
 
         self._lookup_task = None
         self._smart_scan_token = None
+        self._bulk_scan_callback = None
         self.smart_scan_stage = None
         # Last Smart Scan result (picard.smartscan.Decision), for review/UI.
         self.smart_scan_decision: Decision | None = None
@@ -520,11 +522,10 @@ class File(MetadataItem):
         missing_values = {}
         if self._smart_scan_expected is not None and not reverting:
             self._remember_manual_changes()
-            manual_values = {
-                tag: list(self.metadata.getall(tag)) for tag in self._manually_edited_tags
-            }
+            manual_values = {tag: list(self.metadata.getall(tag)) for tag in self._manually_edited_tags}
             missing_values = {
-                tag: list(values) for tag, values in self.metadata.rawitems()
+                tag: list(values)
+                for tag, values in self.metadata.rawitems()
                 if not tag.startswith('~') and not metadata.getall(tag)
             }
         elif reverting:
@@ -543,30 +544,34 @@ class File(MetadataItem):
             self._smart_scan_date = None
             self.dlmtags_date_suggestion = None
         unverified = self._smart_scan_unverified_recording_id
-        if unverified and not self._smart_genre_applying and (
-            metadata is self.orig_metadata
-            or (metadata['musicbrainz_recordingid'] and metadata['musicbrainz_recordingid'] != unverified)
+        if (
+            unverified
+            and not self._smart_genre_applying
+            and (
+                metadata is self.orig_metadata
+                or (metadata['musicbrainz_recordingid'] and metadata['musicbrainz_recordingid'] != unverified)
+            )
         ):
             self._smart_scan_unverified_recording_id = None
             unverified = None
-        release_values = (
-            {tag: list(self.metadata.getall(tag)) for tag in RELEASE_SPECIFIC_TAGS} if unverified else {}
-        )
+        release_values = {tag: list(self.metadata.getall(tag)) for tag in RELEASE_SPECIFIC_TAGS} if unverified else {}
         keep_genre = self._smart_genre_recording_id is not None
-        if keep_genre and not self._smart_genre_applying and (
-            metadata is self.orig_metadata
-            or (
-                metadata['musicbrainz_recordingid']
-                and metadata['musicbrainz_recordingid'] != self._smart_genre_recording_id
+        if (
+            keep_genre
+            and not self._smart_genre_applying
+            and (
+                metadata is self.orig_metadata
+                or (
+                    metadata['musicbrainz_recordingid']
+                    and metadata['musicbrainz_recordingid'] != self._smart_genre_recording_id
+                )
             )
         ):
             self.cancel_smart_genre()
             self._smart_genre_recording_id = None
             keep_genre = False
         genre = list(self.metadata.getall('genre')) if keep_genre else None
-        if self._smart_scan_images is not None and (
-            metadata is not self.orig_metadata or self._smart_genre_applying
-        ):
+        if self._smart_scan_images is not None and (metadata is not self.orig_metadata or self._smart_genre_applying):
             # Keep artwork edits made after the match as well as the snapshot.
             self._smart_scan_images = self.metadata.images.copy()
         saved_metadata = {}
@@ -829,6 +834,7 @@ class File(MetadataItem):
             # file of the batch, so earlier files' parents are not left stale.
             if batch_done:
                 self.tagger.flush_saving_image_parents()
+            self.save_finished.emit(False)
             return
         old_filename = new_filename = self.filename
         if error is not None:
@@ -888,6 +894,8 @@ class File(MetadataItem):
 
         if batch_done:
             self.tagger.flush_saving_image_parents()
+
+        self.save_finished.emit(error is None and result is not None)
 
         if self.tagger.stopping:
             log.debug("Save of %r completed before stopping Picard", self.filename)
@@ -1389,7 +1397,7 @@ class File(MetadataItem):
     # picard.smartscan.decide(); only a MATCHED decision changes New Tags.
     # Nothing is ever written to disk here.
 
-    def start_smart_scan(self):
+    def start_smart_scan(self, *, bulk_callback=None):
         """Run AcoustID once, followed by metadata lookup only if unmatched."""
         if (
             self._smart_scan_token is not None
@@ -1400,28 +1408,32 @@ class File(MetadataItem):
                 File.State.REMOVED,
             }
         ):
-            return
-        self.cancel_smart_genre()
-        self.cancel_tag_searches()
-        if self._smart_scan_expected is None:
-            self._manually_edited_tags.update(
-                tag for tag in set(self.metadata) | set(self.orig_metadata)
-                if not tag.startswith('~') and self.metadata.getall(tag) != self.orig_metadata.getall(tag)
-            )
-        else:
-            self._remember_manual_changes()
-        self._manually_edited_tags.update(self.metadata.deleted_tags)
-        self._smart_scan_expected = Metadata(self.metadata)
+            return False
+        self._bulk_scan_callback = bulk_callback
+        if bulk_callback is None:
+            self.cancel_smart_genre()
+            self.cancel_tag_searches()
+            if self._smart_scan_expected is None:
+                self._manually_edited_tags.update(
+                    tag
+                    for tag in set(self.metadata) | set(self.orig_metadata)
+                    if not tag.startswith('~') and self.metadata.getall(tag) != self.orig_metadata.getall(tag)
+                )
+            else:
+                self._remember_manual_changes()
+            self._manually_edited_tags.update(self.metadata.deleted_tags)
+            self._smart_scan_expected = Metadata(self.metadata)
+            self._smart_scan_date = None
+            self.dlmtags_date_suggestion = None
+            self.dlmtags_album_search = None
+            self.dlmtags_album_suggestions = []
+            self.dlmtags_tag_suggestions = {}
+            self.cancel_credit_lookup()
+            self._dlmtags_credit_nodes = {}
         token = self._smart_scan_token = object()
         self.smart_scan_stage = 'scan'
-        self.smart_scan_decision = None
-        self._smart_scan_date = None
-        self.dlmtags_date_suggestion = None
-        self.dlmtags_album_search = None
-        self.dlmtags_album_suggestions = []
-        self.dlmtags_tag_suggestions = {}
-        self.cancel_credit_lookup()
-        self._dlmtags_credit_nodes = {}
+        if bulk_callback is None:
+            self.smart_scan_decision = None
         self._smart_scan_acoustid_decision = None
         self.set_pending()
         self.tagger._acoustid.analyze(
@@ -1429,6 +1441,7 @@ class File(MetadataItem):
             partial(self._smart_scan_finished, token, File.LookupType.ACOUSTID),
             set_unmatched_acoustid=False,
         )
+        return True
 
     def _smart_scan_finished(self, token, lookuptype, document, http, error):
         # Ignore callbacks from cancelled or superseded operations.
@@ -1443,7 +1456,8 @@ class File(MetadataItem):
             error = QNetworkReply.NetworkError.ServiceUnavailableError
             log.warning(
                 'Smart Scan: temporary HTTP 503 during %s for %r; recording conflicts were not evaluated',
-                lookuptype.name.lower(), self.filename,
+                lookuptype.name.lower(),
+                self.filename,
             )
         if error:
             log.error(
@@ -1504,7 +1518,9 @@ class File(MetadataItem):
             # plain text search; verify each result against its returned credits.
             self._lookup_task = self.tagger.mb_api.find_tracks(
                 partial(self._smart_scan_finished, self._smart_scan_token, File.LookupType.METADATA),
-                search=True, advanced_search=False, query=hints.filename_text,
+                search=True,
+                advanced_search=False,
+                query=hints.filename_text,
                 limit=config.setting['query_limit'],
             )
             return
@@ -1525,6 +1541,26 @@ class File(MetadataItem):
         self._smart_scan_token = None
         self.smart_scan_stage = None
         self._smart_scan_acoustid_decision = None
+        bulk_callback = self._bulk_scan_callback
+        self._bulk_scan_callback = None
+        if bulk_callback is not None:
+            if decision.outcome == Outcome.NEEDS_REVIEW:
+                # Keep the scan's real candidates for the existing individual
+                # Confirm Results workflow. This does not alter New Tags.
+                self.cancel_credit_lookup()
+                self._dlmtags_credit_nodes = {}
+                self._smart_scan_expected = Metadata(self.metadata)
+                self._manually_edited_tags.update(
+                    tag for tag in {'title', 'artist'} if self.metadata.getall(tag) != self.orig_metadata.getall(tag)
+                )
+                self._manually_edited_tags.update(self.metadata.deleted_tags)
+                self.smart_scan_decision = decision
+                recording_id = self._set_tag_suggestions(decision)
+                if recording_id:
+                    self._start_credit_lookup(decision, recording_id)
+            self.clear_pending()
+            bulk_callback(self, decision)
+            return
         self.smart_scan_decision = decision
         if decision.outcome not in {Outcome.MATCHED, Outcome.CANCELLED}:
             # Unverified recording: Artist/Title are offered, not applied.
@@ -1550,11 +1586,7 @@ class File(MetadataItem):
 
     def _start_smart_album_search(self, decision):
         # Second pass is suggestions-only, using the existing providers.
-        if (
-            decision.outcome != Outcome.MATCHED
-            or decision.release_verified
-            or self.state == File.State.REMOVED
-        ):
+        if decision.outcome != Outcome.MATCHED or decision.release_verified or self.state == File.State.REMOVED:
             return
 
         request = TagSearchRequest(self, 'album')
@@ -1603,7 +1635,11 @@ class File(MetadataItem):
         ):
             return False
         confirmed = confirmed_decision(
-            decision, recording_id, self.metadata, self.base_filename, FILE_COMPARISON_WEIGHTS,
+            decision,
+            recording_id,
+            self.metadata,
+            self.base_filename,
+            FILE_COMPARISON_WEIGHTS,
             self._dlmtags_credit_nodes,
         )
         if confirmed is None:
@@ -1630,7 +1666,10 @@ class File(MetadataItem):
         url = 'https://musicbrainz.org/recording/' + track['id']
         if not current:
             self.dlmtags_tag_suggestions['date'] = TagSuggestion(
-                first, 'MusicBrainz', tuple(self.metadata.getall('date')), recording_id=track['id'],
+                first,
+                'MusicBrainz',
+                tuple(self.metadata.getall('date')),
+                recording_id=track['id'],
             )
         elif first[:4] != current[0][:4]:
             self.dlmtags_date_suggestion = (first, 'MusicBrainz', url)
@@ -1642,17 +1681,26 @@ class File(MetadataItem):
         for tag, tag_values in (('genre', values), ('style', styles)):
             current = self.metadata.getall(tag)
             if (
-                tag_values and not any(value.strip() for value in current)
-                and tag not in self._manually_edited_tags and tag not in self.metadata.deleted_tags
+                tag_values
+                and not any(value.strip() for value in current)
+                and tag not in self._manually_edited_tags
+                and tag not in self.metadata.deleted_tags
             ):
                 self.dlmtags_tag_suggestions[tag] = TagSuggestion(
-                    '; '.join(tag_values), source, tuple(current), recording_id=decision.recording_id,
+                    '; '.join(tag_values),
+                    source,
+                    tuple(current),
+                    recording_id=decision.recording_id,
                 )
         self.update()
 
     def _set_tag_suggestions(self, decision):
         suggestions, lookup = tag_suggestions(
-            decision, self.metadata, self.base_filename, self._manually_edited_tags, self._dlmtags_credit_nodes,
+            decision,
+            self.metadata,
+            self.base_filename,
+            self._manually_edited_tags,
+            self._dlmtags_credit_nodes,
         )
         self.dlmtags_tag_suggestions = suggestions
         return lookup
@@ -1715,9 +1763,14 @@ class File(MetadataItem):
         if decision.user_confirmed:
             # Same providers; the values only become suggestions to review.
             request = SmartGenreRequest(
-                self, decision,
+                self,
+                decision,
                 on_result=lambda values, source, status: self._genre_suggested(
-                    decision, request, values, source, status,
+                    decision,
+                    request,
+                    values,
+                    source,
+                    status,
                 ),
             )
         else:
@@ -1784,7 +1837,9 @@ class File(MetadataItem):
             self._smart_scan_date = (recording_id, current)
             if first and first[:4] != current[0][:4]:
                 self.dlmtags_date_suggestion = (
-                    first, 'MusicBrainz', 'https://musicbrainz.org/recording/' + recording_id,
+                    first,
+                    'MusicBrainz',
+                    'https://musicbrainz.org/recording/' + recording_id,
                 )
         else:
             self._smart_scan_date = (recording_id, [first] if first else [])
@@ -1820,12 +1875,21 @@ class File(MetadataItem):
 
     def cancel_smart_scan(self):
         if self._smart_scan_token is not None:
+            bulk_callback = self._bulk_scan_callback
+            self._bulk_scan_callback = None
             self._smart_scan_token = None
             self.smart_scan_stage = None
             self._smart_scan_acoustid_decision = None
-            self.smart_scan_decision = Decision(Outcome.CANCELLED)
+            decision = Decision(Outcome.CANCELLED)
+            if bulk_callback is None:
+                self.smart_scan_decision = decision
             self.tagger._acoustid.stop_analyze(self)
+            if self._lookup_task is not None:
+                self.tagger.webservice.abort_task(self._lookup_task)
+                self._lookup_task = None
             self.clear_pending()
+            if bulk_callback is not None:
+                bulk_callback(self, decision)
 
     def _lookup_finished(self, lookuptype, document, http, error):
         self._lookup_task = None

@@ -3729,6 +3729,51 @@ msgstr ""
 msgid "New User Warning"
 msgstr ""
 
+#: picard/ui/dlmtags/welcome.py
+msgid "Protect your music library"
+msgstr "Προστατέψτε τη μουσική σας συλλογή"
+
+#: picard/ui/dlmtags/welcome.py
+msgid "Saving changes in DLMtags can overwrite existing metadata and, depending on your settings, modify filenames."
+msgstr "Η αποθήκευση αλλαγών στο DLMtags μπορεί να αντικαταστήσει υπάρχοντα μεταδεδομένα και, ανάλογα με τις ρυθμίσεις, να τροποποιήσει ονόματα αρχείων."
+
+#: picard/ui/dlmtags/welcome.py
+msgid "We recommend:"
+msgstr "Συνιστούμε:"
+
+#: picard/ui/dlmtags/welcome.py
+msgid "Backing up your music before making bulk changes."
+msgstr "Να δημιουργείτε αντίγραφα ασφαλείας πριν από μαζικές αλλαγές."
+
+#: picard/ui/dlmtags/welcome.py
+msgid "Reviewing proposed tags before confirming."
+msgstr "Να ελέγχετε τις προτεινόμενες ετικέτες πριν από την επιβεβαίωση."
+
+#: picard/ui/dlmtags/welcome.py
+msgid "Testing with a small number of copied files first."
+msgstr "Να κάνετε πρώτα δοκιμές σε λίγα αντίγραφα αρχείων."
+
+#: picard/ui/dlmtags/welcome.py
+msgid "DLMtags is free, open-source software based on MusicBrainz Picard and is provided without warranty."
+msgstr "Το DLMtags είναι δωρεάν λογισμικό ανοιχτού κώδικα, βασισμένο στο MusicBrainz Picard, και παρέχεται χωρίς εγγύηση."
+
+#: picard/ui/dlmtags/welcome.py
+msgid "DLMtags logo"
+msgstr "Λογότυπο DLMtags"
+
+#: picard/ui/dlmtags/welcome.py
+#, python-format
+msgid "Recommendation %d"
+msgstr "Σύσταση %d"
+
+#: picard/ui/dlmtags/welcome.py
+msgid "Don't show again"
+msgstr "Να μην εμφανιστεί ξανά"
+
+#: picard/ui/dlmtags/welcome.py
+msgid "Continue"
+msgstr "Συνέχεια"
+
 #: picard/ui/passworddialog.py:40
 #, python-format
 msgid ""

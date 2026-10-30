@@ -619,9 +619,9 @@ BoolOption('setting', 'show_new_user_dialog', True, title=N_("Show warning when 
 # DLMtags: optional per-user Discogs access; never distribute tokens.
 TextOption('setting', 'dlmtags_discogs_token', '', shareable=False)
 ListOption(
-    'setting', 'dlmtags_visible_tags',
-    ['artist', 'title', 'album', 'date', 'genre',
-     'style', 'bpm', '~length', 'subtitle'],
+    'setting',
+    'dlmtags_visible_tags',
+    ['title', 'artist', 'date', 'genre'],
     title=N_('DLMtags visible editor fields'),
 )
 BoolOption('setting', 'dlmtags_discogs_enabled', False)

@@ -147,10 +147,16 @@ from picard.ui import (
 )
 from picard.ui.aboutdialog import AboutDialog
 from picard.ui.coverartbox import CoverArtBox
-from picard.ui.enums import MainAction
+from picard.ui.dlmtags.exit_dialog import (
+    ExitConfirmationDialog,
+    has_unsaved_changes,
+)
+from picard.ui.dlmtags.save_toast import SaveToastManager
 from picard.ui.dlmtags.sidebar import FileBrowserSidebar
 from picard.ui.dlmtags.tag_editor import StructuredMetadataBox
+from picard.ui.dlmtags.welcome import DLMtagsWelcomeDialog
 from picard.ui.dlmtags.workspace import DLMtagsWorkspace
+from picard.ui.enums import MainAction
 from picard.ui.filter import Filter
 from picard.ui.infodialog import (
     AlbumInfoDialog,
@@ -293,6 +299,7 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
         self.tutorial = TutorialManager(self)
 
         self.setupUi()
+        self._save_notifications = SaveToastManager(self)
 
         webservice = self.tagger.webservice
         webservice_manager = webservice.manager
@@ -315,7 +322,7 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
                 func.on_exit()
 
     def setupUi(self):
-        self.setWindowTitle(_("MusicBrainz Picard"))
+        self.setWindowTitle('DLMtags')
 
         self.show_close_window = IS_MACOS
 
@@ -505,7 +512,9 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
 
     def closeEvent(self, event):
         config = get_config()
-        if config.setting['quit_confirmation'] and not self.show_quit_confirmation():
+        if (
+            config.setting['quit_confirmation'] or self.tagger._saving_files_count
+        ) and not self.show_quit_confirmation():
             event.ignore()
             return
         if self.player:
@@ -534,33 +543,16 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
         if self.tagger.stopping:
             return True
 
-        unsaved_files = sum(a.get_num_unsaved_files() for a in self.tagger.albums.values())
-        QMessageBox = QtWidgets.QMessageBox
-
-        if unsaved_files > 0:
-            msg = QMessageBox(self)
-            msg.setIcon(QMessageBox.Icon.Question)
-            msg.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
-            msg.setWindowTitle(_("Unsaved Changes"))
-            msg.setText(_("Are you sure you want to quit Picard?"))
-            txt = (
-                ngettext(
-                    "There is %d unsaved file. Closing Picard will lose all unsaved changes.",
-                    "There are %d unsaved files. Closing Picard will lose all unsaved changes.",
-                    unsaved_files,
-                )
-                % unsaved_files
-            )
-            msg.setInformativeText(txt)
-            cancel = msg.addButton(QMessageBox.StandardButton.Cancel)
-            msg.setDefaultButton(cancel)
-            msg.addButton(_("&Quit Picard"), QMessageBox.ButtonRole.YesRole)
-            ret = msg.exec()
-
-            if ret == QMessageBox.StandardButton.Cancel:
-                return False
-
-        return True
+        files = [
+            file
+            for file in iter_unique(self.tagger.files.values())
+            if file.state != File.State.REMOVED
+            and (has_unsaved_changes(file) or file.metadata.images != file.orig_metadata.images)
+        ]
+        if not files and not self.tagger._saving_files_count:
+            return True
+        dialog = ExitConfirmationDialog(files, self.tagger, lambda: self._confirm_file_save(len(files)), self)
+        return dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted
 
     def _has_session_content(self):
         """Return True if there is session content to save/close."""
@@ -1288,11 +1280,15 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
 
     def set_tab_order(self):
         widgets = (
-            self.file_sidebar.search, self.file_browser, self.file_sidebar.songs,
+            self.file_sidebar.search,
+            self.file_browser,
+            self.file_sidebar.songs,
             self.modern_workspace.tag_editor,
-            self.search_combo, self.search_edit, self.modern_workspace.results.table,
+            self.search_combo,
+            self.search_edit,
+            self.modern_workspace.results.table,
         )
-        for before, after in zip(widgets, widgets[1:]):
+        for before, after in zip(widgets, widgets[1:], strict=False):
             self.setTabOrder(before, after)
 
     def _toggle_search(self):
@@ -1450,16 +1446,25 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
     def save(self):
         """Tell the tagger to save the selected objects."""
         self.tutorial.show('save')
+        files = list(iter_files_from_objects(self.selected_objects, save=True))
+        if self._confirm_file_save(len(files)):
+            if not get_config().setting['enable_tag_saving']:
+                self.tagger.save(files)
+                return
+            # Register before dispatch: a callback may complete while the next file is queued.
+            new_files = self._save_notifications.begin(files)
+            if new_files:
+                self.tagger.save(new_files)
+
+    def _confirm_file_save(self, count):
         config = get_config()
         if config.setting['file_save_warning']:
-            count = len(list(iter_files_from_objects(self.selected_objects)))
             msg = SaveWarningDialog(self, count)
             proceed_with_save, disable_warning = msg.show()
             config.setting['file_save_warning'] = not disable_warning
         else:
             proceed_with_save = True
-        if proceed_with_save:
-            self.tagger.save(self.selected_objects)
+        return proceed_with_save
 
     def trash_files(self):
         files = list(iter_files_from_objects(self.selected_objects))
@@ -2500,6 +2505,12 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
 
     def show_new_user_dialog(self, config):
         if config.setting['show_new_user_dialog']:
+            if hasattr(self, 'modern_workspace'):
+                msg = DLMtagsWelcomeDialog(self)
+                show_again = msg.show_startup_warning()
+                if show_again is not None:
+                    config.setting['show_new_user_dialog'] = show_again
+                return
             msg = NewUserDialog(self)
             config.setting['show_new_user_dialog'] = msg.show()
 

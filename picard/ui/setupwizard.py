@@ -17,10 +17,11 @@
 # along with this program; if not, see <https://www.gnu.org/licenses/>.
 
 
+from typing import ClassVar
+
 from PyQt6 import (
     QtCore,
     QtGui,
-    QtNetwork,
     QtWidgets,
 )
 
@@ -39,6 +40,10 @@ from picard.util import (
 )
 from picard.util.readthedocs import ReadTheDocs
 
+from picard.ui.dlmtags.api_credentials import (
+    API_PROVIDERS,
+    ApiCredentialTester,
+)
 from picard.ui.theme import theme
 
 
@@ -381,15 +386,18 @@ class CoverArtPage(SetupWizardPage):
         return providers
 
 
-
 class OnlineSourcesPage(SetupWizardPage):
     """Optional background metadata sources, using the existing Picard settings."""
 
-    PROVIDERS = (
-        ('discogs', 'Discogs', 'dlmtags_discogs_enabled', 'dlmtags_discogs_token',
-         'https://www.discogs.com/settings/developers'),
-        ('lastfm', 'Last.fm', 'smart_genre_lastfm_enabled', 'lastfm_api_key',
-         'https://www.last.fm/api/account/create'),
+    PROVIDERS = tuple(
+        (
+            provider,
+            details['title'],
+            details['enabled_key'],
+            details['credential_key'],
+            details['connect_url'],
+        )
+        for provider, details in API_PROVIDERS.items()
     )
 
     def __init__(self, parent=None):
@@ -397,11 +405,15 @@ class OnlineSourcesPage(SetupWizardPage):
         self.setTitle(_('Online Music Sources'))
         self.setSubTitle(_('Choose where DLMtags searches for missing music information.'))
         layout = QtWidgets.QVBoxLayout(self)
-        info = WrappedLabel(_('MusicBrainz and AcoustID use the existing automatic recognition setup. '
-                              'Discogs and Last.fm are optional and require a personal API credential.'))
+        info = WrappedLabel(
+            _(
+                'MusicBrainz and AcoustID use the existing automatic recognition setup. '
+                'Discogs and Last.fm are optional and require a personal API credential.'
+            )
+        )
         layout.addWidget(info)
-        self._network = QtNetwork.QNetworkAccessManager(self)
-        self._pending = {}
+        self._credential_tester = ApiCredentialTester(self)
+        self._credential_tester.finished.connect(self._test_finished)
         self._controls = {}
         for provider, title, enabled_key, credential_key, url in self.PROVIDERS:
             group = QtWidgets.QGroupBox(title, self)
@@ -422,18 +434,24 @@ class OnlineSourcesPage(SetupWizardPage):
             controls.addWidget(status, 1)
             form.addRow(controls)
             check.clicked.connect(lambda _=False, name=provider: self._test_connection(name))
-            enabled.toggled.connect(lambda state, edit=credential, button=check: (edit.setEnabled(state), button.setEnabled(state)))
+            enabled.toggled.connect(
+                lambda state, edit=credential, button=check: (edit.setEnabled(state), button.setEnabled(state))
+            )
             self._controls[provider] = (enabled, credential, check, status, enabled_key, credential_key)
             layout.addWidget(group)
-        notice = WrappedLabel(_('Credentials are stored locally in Picard settings without encryption. '
-                                'You may skip these sources and connect them later.'))
+        notice = WrappedLabel(
+            _(
+                'Credentials are stored locally in Picard settings without encryption. '
+                'You may skip these sources and connect them later.'
+            )
+        )
         layout.addWidget(notice)
         layout.addStretch()
 
     def initializePage(self):
         config = get_config()
         first_run = not config.persist['setup_wizard_completed']
-        for provider, (enabled, credential, _check, status, enabled_key, credential_key) in self._controls.items():
+        for _provider, (enabled, credential, _check, status, enabled_key, credential_key) in self._controls.items():
             current_enabled = config.setting[enabled_key]
             # Default opt-in only on first setup; never overwrite existing installations.
             enabled.setChecked(True if first_run and not config.setting[credential_key] else current_enabled)
@@ -446,47 +464,14 @@ class OnlineSourcesPage(SetupWizardPage):
         if not enabled.isChecked() or not token:
             status.setText(_('Enter a key first'))
             return
-        if provider == 'discogs':
-            request = QtNetwork.QNetworkRequest(QtCore.QUrl('https://api.discogs.com/oauth/identity'))
-            request.setRawHeader(b'Authorization', ('Discogs token=' + token).encode('utf-8'))
-            request.setRawHeader(b'User-Agent', b'DLMtags/1.0')
-        else:
-            query = QtCore.QUrlQuery()
-            for key, value in (('method', 'tag.getTopTags'), ('tag', 'rock'), ('api_key', token), ('format', 'json')):
-                query.addQueryItem(key, value)
-            url = QtCore.QUrl('https://ws.audioscrobbler.com/2.0/')
-            url.setQuery(query)
-            request = QtNetwork.QNetworkRequest(url)
-        request.setTransferTimeout(10000)
         button.setEnabled(False)
         status.setText(_('Testing…'))
-        reply = self._network.get(request)
-        self._pending[provider] = reply
-        reply.finished.connect(lambda name=provider, r=reply: self._test_finished(name, r))
+        self._credential_tester.test(provider, token)
 
-    def _test_finished(self, provider, reply):
-        if self._pending.get(provider) is not reply:
-            reply.deleteLater()
-            return
-        del self._pending[provider]
+    def _test_finished(self, provider, success, message):
         enabled, credential, button, status, _enabled_key, _credential_key = self._controls[provider]
         button.setEnabled(enabled.isChecked())
-        http_status = reply.attribute(QtNetwork.QNetworkRequest.Attribute.HttpStatusCodeAttribute)
-        payload = bytes(reply.readAll())
-        import json
-        try:
-            data = json.loads(payload.decode('utf-8'))
-        except (ValueError, UnicodeError):
-            data = {}
-        if reply.error() != QtNetwork.QNetworkReply.NetworkError.NoError or http_status != 200:
-            status.setText(_('Connection failed'))
-        elif provider == 'lastfm' and ('error' in data or 'toptags' not in data):
-            status.setText(_('Invalid key / provider response'))
-        elif provider == 'discogs' and 'username' not in data:
-            status.setText(_('Invalid token / provider response'))
-        else:
-            status.setText(_('Connected'))
-        reply.deleteLater()
+        status.setText(_('Connected') if success else message)
 
     def save_settings(self, config):
         for enabled, credential, _button, _status, enabled_key, credential_key in self._controls.values():
@@ -620,7 +605,6 @@ class MetadataPage(SetupWizardPage):
         config.setting['convert_punctuation'] = self.convert_punctuation_checkbox.is_checked()
 
 
-
 class TagDisplayPage(SetupWizardPage):
     """Configure visible tags without changing stored metadata."""
 
@@ -641,9 +625,16 @@ class TagDisplayPage(SetupWizardPage):
         ('comment', 'Comment'),
     )
 
-    RECOMMENDED = {
-        'artist', 'title', 'album', 'date', 'genre',
-        'style', 'bpm', '~length', 'subtitle'
+    RECOMMENDED: ClassVar[set[str]] = {
+        'artist',
+        'title',
+        'album',
+        'date',
+        'genre',
+        'style',
+        'bpm',
+        '~length',
+        'subtitle',
     }
 
     def __init__(self, parent=None):
@@ -656,13 +647,11 @@ class TagDisplayPage(SetupWizardPage):
         buttons = QtWidgets.QHBoxLayout()
         for title, tags in (
             ('Recommended', self.RECOMMENDED),
-            ('Select All', {key for key, _ in self.TAGS}),
+            ('Select All', {key for key, _tag in self.TAGS}),
             ('Minimal', {'artist', 'title'}),
         ):
             button = QtWidgets.QPushButton(title)
-            button.clicked.connect(
-                lambda checked=False, selection=tags: self.select_tags(selection)
-            )
+            button.clicked.connect(lambda checked=False, selection=tags: self.select_tags(selection))
             buttons.addWidget(button)
         layout.addLayout(buttons)
 
@@ -680,10 +669,7 @@ class TagDisplayPage(SetupWizardPage):
         scroll.setWidget(container)
         layout.addWidget(scroll)
 
-        hint = QtWidgets.QLabel(
-            'Hidden tags are not deleted or modified. '
-            'This setting only changes their visibility.'
-        )
+        hint = QtWidgets.QLabel('Hidden tags are not deleted or modified. This setting only changes their visibility.')
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
@@ -695,9 +681,8 @@ class TagDisplayPage(SetupWizardPage):
         self.select_tags(set(get_config().setting['dlmtags_visible_tags']))
 
     def save_settings(self, config):
-        config.setting['dlmtags_visible_tags'] = [
-            tag for tag, check in self.checks.items() if check.isChecked()
-        ]
+        config.setting['dlmtags_visible_tags'] = [tag for tag, check in self.checks.items() if check.isChecked()]
+
 
 class SetupWizard(QtWidgets.QWizard):
     """First-run setup wizard for new Picard users."""

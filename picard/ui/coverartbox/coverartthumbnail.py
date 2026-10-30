@@ -74,8 +74,8 @@ class CoverArtThumbnail(ActiveLabel):
             raise ValueError("pixmap_cache is required")
         self._pixmap_cache = pixmap_cache
         self._update_default_pixmaps()
-        self.setPixmap(self.shadow)
-        self.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignHCenter)
+        self.setPixmap(self.placeholder)
+        self.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.setMargin(0)
         self.setAcceptDrops(drops)
         self.clicked.connect(self.open_release_page)
@@ -92,11 +92,12 @@ class CoverArtThumbnail(ActiveLabel):
             if self.data:
                 self.set_data(self.data, force=True, has_common_images=self.has_common_images)
             else:
-                self.setPixmap(self.shadow)
+                self.setPixmap(self.placeholder)
 
     def _update_default_pixmaps(self):
         w, h = self.scaled(THUMBNAIL_WIDTH, THUMBNAIL_WIDTH)
         self.shadow = self._load_cached_default_pixmap(":/images/CoverArtShadow.png", w, h)
+        self.placeholder = self._load_cached_default_pixmap(":/images/dlmtags-artwork-default.png", w, h)
         self.file_missing_pixmap = self._load_cached_default_pixmap(":/images/image-missing.png", w, h)
 
     def _load_cached_default_pixmap(self, pixmap_path, w, h):
@@ -189,7 +190,7 @@ class CoverArtThumbnail(ActiveLabel):
             return
 
         if not self.data:
-            self.setPixmap(self.shadow)
+            self.setPixmap(self.placeholder)
             self.current_pixmap_key = None
             return
 

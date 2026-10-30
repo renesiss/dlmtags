@@ -45,7 +45,6 @@ from picard.const.sys import (
     IS_WIN,
 )
 from picard.env import parse_bool_env
-from picard.i18n import gettext as _
 from picard.util import (
     get_url,
     restore_method,
@@ -291,7 +290,7 @@ class PicardDialog(QtWidgets.QDialog, PreserveGeometry):
         visually associated with their parent and don't need it.
         """
         if not self.parent():
-            title = _("%s — MusicBrainz Picard") % title
+            title = f'{title} — DLMtags'
         self.setWindowTitle(title)
 
     def show_help(self, help_url=None):

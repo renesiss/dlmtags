@@ -811,6 +811,18 @@ class FileSavingFinishedImagesTest(PicardTestCase):
     def _finish_saving(self):
         self.file._saving_finished(result=self.file.filename)
 
+    def test_completion_signal_reports_success_after_callback(self):
+        completed = Mock()
+        self.file.save_finished.connect(completed)
+        self._finish_saving()
+        completed.assert_called_once_with(True)
+
+    def test_completion_signal_reports_failure_after_callback(self):
+        completed = Mock()
+        self.file.save_finished.connect(completed)
+        self.file._saving_finished(error=OSError('save failed'))
+        completed.assert_called_once_with(False)
+
     def test_removed_from_tags_with_no_replacement(self):
         """No new image was fetched, only the previously tagged image kept
         for external export: tags end up empty, orig_metadata must match."""

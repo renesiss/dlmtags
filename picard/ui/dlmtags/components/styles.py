@@ -126,6 +126,101 @@ QToolButton[dlmtagsComponent="actionButton"]:focus {
     border-color: palette(highlight);
 }
 QToolButton[dlmtagsComponent="actionButton"]:disabled { color: palette(mid); }
+QToolButton[dlmtagsSettingsNav="true"] {
+    color: palette(text); background: transparent;
+    border: 1px solid transparent; border-radius: 8px;
+    min-height: 34px; padding: 5px 8px; text-align: left;
+}
+QToolButton[dlmtagsSettingsNav="true"]:hover:enabled {
+    background: palette(button);
+}
+QToolButton[dlmtagsSettingsNav="true"]:checked {
+    background: palette(alternate-base); border-color: palette(mid); color: palette(text);
+}
+QToolButton[dlmtagsSettingsNav="true"]:focus {
+    border-color: palette(mid);
+}
+QToolButton[dlmtagsSettingsNav="true"]:disabled {
+    color: palette(mid); background: transparent;
+}
+QWidget#dlmtagsApiKeysPage { background: palette(base); }
+QDialog#dlmtagsWelcomeDialog {
+    background: palette(window); color: palette(text);
+}
+QDialog#dlmtagsWelcomeDialog QLabel {
+    background: transparent; border: none; color: palette(text); font-size: 13px;
+}
+QDialog#dlmtagsWelcomeDialog QLabel#dlmtagsWelcomeTitle {
+    font-size: 21px; font-weight: 650;
+}
+QDialog#dlmtagsWelcomeDialog QLabel#dlmtagsWelcomeLicense {
+    color: palette(placeholder-text); font-size: 12px;
+}
+QDialog#dlmtagsWelcomeDialog QLabel[dlmtagsWelcomeBullet="true"] {
+    color: palette(highlight); font-size: 16px; font-weight: 700;
+}
+QDialog#dlmtagsWelcomeDialog QPushButton#dlmtagsWelcomeContinue {
+    background: palette(highlight); border: 1px solid palette(highlight);
+    border-radius: 7px; color: palette(highlighted-text); min-height: 30px;
+    min-width: 104px; padding: 3px 16px; font-weight: 600;
+}
+QDialog#dlmtagsWelcomeDialog QPushButton#dlmtagsWelcomeContinue:hover {
+    background: palette(button); color: palette(text);
+}
+QDialog#dlmtagsWelcomeDialog QPushButton#dlmtagsWelcomeContinue:focus {
+    border-color: palette(text);
+}
+QDialog#dlmtagsWelcomeDialog QCheckBox#dlmtagsWelcomeDontShowAgain {
+    background: transparent; border: none; color: palette(text); spacing: 8px;
+}
+QDialog#dlmtagsWelcomeDialog QCheckBox#dlmtagsWelcomeDontShowAgain::indicator {
+    width: 16px; height: 16px; background: palette(base);
+    border: 1px solid palette(mid); border-radius: 4px;
+}
+QDialog#dlmtagsWelcomeDialog QCheckBox#dlmtagsWelcomeDontShowAgain::indicator:checked {
+    background: palette(highlight); border-color: palette(highlight);
+}
+QFrame[dlmtagsApiCard="true"] {
+    background: palette(alternate-base); border: 1px solid palette(mid); border-radius: 10px;
+}
+QLabel[dlmtagsApiTitle="true"] {
+    background: transparent; border: none; color: palette(text);
+    font-size: 18px; font-weight: 650;
+}
+QLabel[dlmtagsApiDescription="true"] {
+    background: transparent; border: none; color: palette(placeholder-text); font-size: 12px;
+}
+QLabel[dlmtagsApiProvider="true"] {
+    background: transparent; border: none; color: palette(text); font-size: 14px; font-weight: 600;
+}
+QLabel[dlmtagsApiStatus="true"] {
+    background: palette(base); border: 1px solid palette(mid); border-radius: 10px;
+    color: palette(placeholder-text); font-size: 11px; padding: 3px 9px;
+}
+QLabel[dlmtagsApiStatus="true"][apiCredentialStatus="connected"] {
+    color: #69c98c; border-color: #397c52;
+}
+QLabel[dlmtagsApiStatus="true"][apiCredentialStatus="failed"] {
+    color: #ef7777; border-color: #8c4444;
+}
+QLabel[dlmtagsApiStatus="true"][apiCredentialStatus="testing"] {
+    color: #e5b85c; border-color: #80662f;
+}
+QLineEdit[dlmtagsApiCredential="true"] {
+    background: palette(base); border: 1px solid palette(mid); border-radius: 7px;
+    color: palette(text); min-height: 32px; padding: 3px 10px;
+}
+QLineEdit[dlmtagsApiCredential="true"]:focus { border-color: palette(highlight); }
+QPushButton[dlmtagsApiAction="true"] {
+    background: transparent; border: 1px solid palette(mid); border-radius: 7px;
+    color: palette(text); min-height: 30px; padding: 3px 12px;
+}
+QPushButton[dlmtagsApiAction="true"]:hover:enabled {
+    background: palette(button); border-color: palette(highlight);
+}
+QPushButton[dlmtagsApiAction="true"]:pressed { background: palette(alternate-base); }
+QPushButton[dlmtagsApiAction="true"]:focus { border-color: palette(highlight); }
+QPushButton[dlmtagsApiAction="true"]:disabled { color: palette(mid); border-color: palette(alternate-base); }
 QTableView[dlmtagsComponent="table"] {
     background: palette(base); color: palette(text); border: none;
     selection-background-color: palette(highlight);

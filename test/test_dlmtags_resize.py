@@ -33,6 +33,23 @@ from picard.ui.enums import MainAction
 HALF_1366_WORKSPACE = 1366 // 2 - 220 - 6
 
 
+class Sidebar(QtCore.QObject):
+    """The Songs Sidebar selection contract used by the workspace."""
+
+    selected_songs_changed = QtCore.pyqtSignal()
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.paths = []
+
+    def _selected_paths(self):
+        return self.paths
+
+    def select(self, paths):
+        self.paths = paths
+        self.selected_songs_changed.emit()
+
+
 class Window(QtWidgets.QMainWindow):
     """The parts of MainWindow the workspace uses, with real Qt widgets."""
 
@@ -40,14 +57,38 @@ class Window(QtWidgets.QMainWindow):
         super().__init__()
         self.tagger = tagger
         self.action_map = {
-            action: QtGui.QAction(name, self) for action, name in (
-                (MainAction.AUTOTAG, 'Lookup'), (MainAction.ANALYZE, 'Scan'),
-                (MainAction.SAVE, 'Save'), (MainAction.SHOW_COVER_ART, 'Cover Art'),
+            action: QtGui.QAction(name, self)
+            for action, name in (
+                (MainAction.AUTOTAG, 'Lookup'),
+                (MainAction.ANALYZE, 'Scan'),
+                (MainAction.SAVE, 'Save'),
+                (MainAction.SHOW_COVER_ART, 'Cover Art'),
             )
         }
+        for action_id in (
+            MainAction.ADD_FILES,
+            MainAction.ADD_DIRECTORY,
+            MainAction.REMOVE,
+            MainAction.TRASH,
+            MainAction.REFRESH,
+            MainAction.OPEN_FOLDER,
+            MainAction.BROWSER_LOOKUP,
+            MainAction.LOOKUP_ISRC,
+            MainAction.SUBMIT_ACOUSTID,
+            MainAction.SUBMIT_ISRC,
+            MainAction.GENERATE_FINGERPRINTS,
+            MainAction.SHOW_SCRIPT_EDITOR,
+            MainAction.TAGS_FROM_FILENAMES,
+        ):
+            self.action_map[action_id] = QtGui.QAction(action_id.value, self)
+        self.action_map[MainAction.ADD_FILES].setShortcut(QtGui.QKeySequence('Ctrl+O'))
+        for action_id in (MainAction.AUTOTAG, MainAction.ANALYZE, MainAction.SAVE):
+            self.action_map[action_id].setEnabled(False)
+        self.action_map[MainAction.ANALYZE].setShortcut(QtGui.QKeySequence('Ctrl+Y'))
         self.search_edit = QtWidgets.QLineEdit()
         self.search_combo = QtWidgets.QComboBox()
         self.selected_objects = []
+        self.file_sidebar = Sidebar(self)
         box = MagicMock()
         box.files = {file}
         box.tag_diff.tag_names = list(PRIMARY_TAGS)
@@ -66,12 +107,18 @@ class Window(QtWidgets.QMainWindow):
     def show_setup_wizard(self, force=False):
         pass
 
+    def show_options(self):
+        pass
+
 
 class WorkspaceResizeTest(InlineTestCase):
     def setUp(self):
         super().setUp()
         self.patch_tagger_instance(
-            'picard.ui', 'picard.ui.metadatabox', 'picard.ui.coverartbox', 'picard.ui.coverartbox.coverartthumbnail',
+            'picard.ui',
+            'picard.ui.metadatabox',
+            'picard.ui.coverartbox',
+            'picard.ui.coverartbox.coverartthumbnail',
         )
         patcher = patch.object(type(get_config().setting), 'setting_changed', MagicMock(), create=True)
         patcher.start()
@@ -96,7 +143,7 @@ class WorkspaceResizeTest(InlineTestCase):
     def show(self, width, height):
         self.window.resize(width, height)
         self.window.show()
-        for unused in range(3):
+        for _unused in range(3):
             QtWidgets.QApplication.processEvents()
 
     def test_minimum_width_fits_half_of_a_1366_screen(self):
@@ -163,3 +210,36 @@ class WorkspaceResizeTest(InlineTestCase):
         # Long text wraps inside the panel's own scroll area.
         self.assertTrue(panel.title_label.wordWrap())
         self.assertLessEqual(panel.scroll.widget().width(), panel.scroll.viewport().width())
+
+    def test_toolbar_contains_only_supported_actions_and_hides_legacy_shortcuts(self):
+        toolbar = self.workspace.findChild(QtWidgets.QToolBar)
+        toolbar_actions = toolbar.actions()
+        bulk_action = self.workspace.findChild(QtGui.QAction, 'dlmtags_bulk_auto_tag_action')
+        settings_action = self.workspace.findChild(QtGui.QAction, 'dlmtags_settings_action')
+        self.assertEqual(
+            [
+                bulk_action,
+                self.window.action_map[MainAction.ANALYZE],
+                self.window.action_map[MainAction.SAVE],
+                settings_action,
+            ],
+            toolbar_actions,
+        )
+        self.assertNotIn(self.window.action_map[MainAction.AUTOTAG], toolbar_actions)
+        for action_id in (MainAction.ANALYZE, MainAction.SAVE):
+            self.assertIn(self.window.action_map[action_id], toolbar_actions)
+        self.assertNotIn(self.window.action_map[MainAction.SHOW_COVER_ART], toolbar_actions)
+        self.assertEqual(QtGui.QKeySequence('Ctrl+Y'), self.window.action_map[MainAction.ANALYZE].shortcut())
+        self.assertFalse(self.window.action_map[MainAction.ANALYZE].isEnabled())
+        self.assertTrue(self.window.action_map[MainAction.ADD_FILES].shortcut().isEmpty())
+        self.assertIsNone(self.workspace.findChild(QtWidgets.QMenu, 'dlmtags_advanced_menu'))
+        self.assertIsNone(self.workspace.findChild(QtWidgets.QMenu, 'dlmtags_legacy_picard_menu'))
+
+    def test_bulk_action_follows_sidebar_selection_immediately(self):
+        self.assertFalse(self.workspace.bulk_action.isEnabled())
+        self.window.file_sidebar.select(['/tmp/one.mp3'])
+        self.assertTrue(self.workspace.bulk_action.isEnabled())
+        self.window.file_sidebar.select(['/tmp/one.mp3', '/tmp/two.flac'])
+        self.assertTrue(self.workspace.bulk_action.isEnabled())
+        self.window.file_sidebar.select([])
+        self.assertFalse(self.workspace.bulk_action.isEnabled())

@@ -61,6 +61,7 @@ class AboutDialog(PicardDialog, SingletonDialog):
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
         self.ui = Ui_AboutDialog()
         self.ui.setupUi(self)
+        self.setWindowTitle(_('About DLMtags'))
         self._apply_styling()
         self._update_content()
         theme.theme_changed.connect(self._apply_styling)

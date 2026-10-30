@@ -24,8 +24,11 @@ from picard.config import get_config
 
 from picard.ui.setupwizard import (
     MetadataPage,
+    OnlineSourcesPage,
     SetupWizard,
+    TagDisplayPage,
     UpdatesPage,
+    WelcomePage,
 )
 
 
@@ -109,8 +112,13 @@ class TestSetupWizardUpdatesPage(PicardTestCase):
 
 
 class TestSetupWizardMetadataPage(PicardTestCase):
-    def test_metadata_page_registered(self):
-        self.assertIn(MetadataPage, SetupWizard.PAGES)
+    def test_dlmtags_onboarding_pages(self):
+        self.assertEqual(
+            (WelcomePage, OnlineSourcesPage, TagDisplayPage, UpdatesPage),
+            SetupWizard.PAGES,
+        )
+        # MetadataPage remains available for its settings, but is not part of first-run onboarding.
+        self.assertNotIn(MetadataPage, SetupWizard.PAGES)
 
     def test_initialize_reflects_config_disabled(self, *args):
         self._check_roundtrip(initial=False)

@@ -9,6 +9,7 @@ through Find Tag; nothing is saved without Save.
 """
 
 from collections import Counter
+import os.path
 
 from PyQt6 import (
     QtCore,
@@ -34,8 +35,9 @@ from picard.tagprovenance import (
 from picard.util import iter_files_from_objects
 
 from picard.ui.dlmtags.artwork import ArtworkSuggestions
-from picard.ui.dlmtags.components.card import Card
+from picard.ui.dlmtags.bulk_autotag import BulkAutoTagDialog
 from picard.ui.dlmtags.components.action_button import ActionButton
+from picard.ui.dlmtags.components.card import Card
 from picard.ui.dlmtags.components.section_header import SectionHeader
 from picard.ui.dlmtags.components.splitter import Splitter
 from picard.ui.dlmtags.components.styles import style_component
@@ -159,9 +161,7 @@ class MatchingResults(QtWidgets.QWidget):
         self._operation_timer.start(0)
 
     def _update_operation(self):
-        pending_network = bool(
-            self._window.tagger.webservice.num_pending_web_requests
-        )
+        pending_network = bool(self._window.tagger.webservice.num_pending_web_requests)
         active = self._has_active_operation()
         self.cancel_action.setEnabled(active or pending_network)
 
@@ -191,9 +191,7 @@ class MatchingResults(QtWidgets.QWidget):
         return False
 
     def _finish_operation(self):
-        pending_network = bool(
-            self._window.tagger.webservice.num_pending_web_requests
-        )
+        pending_network = bool(self._window.tagger.webservice.num_pending_web_requests)
         if pending_network or self._has_active_operation():
             self._queue_update()
             return
@@ -228,9 +226,9 @@ class MatchingResults(QtWidgets.QWidget):
     def _describe_many(self, files):
         decisions = [file.smart_scan_decision for file in files if file.smart_scan_decision is not None]
         if not decisions:
-            return [_('No matching candidates to display.')] if not files else [
-                _('Select one song to see its details.')
-            ]
+            return (
+                [_('No matching candidates to display.')] if not files else [_('Select one song to see its details.')]
+            )
         counts = Counter(decision.outcome for decision in decisions)
         return [
             ', '.join('%s: %d' % (_(OUTCOME_LABELS[outcome]), count) for outcome, count in counts.items()),
@@ -252,19 +250,22 @@ class MatchingResults(QtWidgets.QWidget):
             recognition = 'AcoustID + MusicBrainz' if decision.source == Source.ACOUSTID else 'MusicBrainz'
             lines.append(_('Recognition: %s') % recognition)
             if decision.user_confirmed:
-                lines.append(_('Recording confirmed by user, not verified automatically: %s') % '; '.join(
-                    _(REASON_LABELS[reason]) for reason in decision.notes
-                ))
+                lines.append(
+                    _('Recording confirmed by user, not verified automatically: %s')
+                    % '; '.join(_(REASON_LABELS[reason]) for reason in decision.notes)
+                )
             labels = decision.details.get('source_labels', ())
             if labels:
                 lines.append(_('Source description: %s') % ', '.join(labels))
-            additional = sorted({
-                name
-                for tag in file.dlmtags_tag_sources
-                if file._dlmtags_source_recordings.get(tag) == match.track['id']
-                for name in provider_names(source_for(file, tag))
-                if name in {'Discogs', 'Last.fm'}
-            })
+            additional = sorted(
+                {
+                    name
+                    for tag in file.dlmtags_tag_sources
+                    if file._dlmtags_source_recordings.get(tag) == match.track['id']
+                    for name in provider_names(source_for(file, tag))
+                    if name in {'Discogs', 'Last.fm'}
+                }
+            )
             if additional:
                 lines.append(_('Additional metadata: %s') % ', '.join(additional))
             if decision.release_verified:
@@ -273,9 +274,13 @@ class MatchingResults(QtWidgets.QWidget):
                 lines.append(_('Recording identified. Album details were kept unchanged.'))
                 album = album_search_status(file)
                 if album is not None:
-                    lines.append(_('Album suggestions: %(status)s — %(message)s') % {
-                        'status': status_text(album[0]), 'message': album[1],
-                    })
+                    lines.append(
+                        _('Album suggestions: %(status)s — %(message)s')
+                        % {
+                            'status': status_text(album[0]),
+                            'message': album[1],
+                        }
+                    )
         elif decision.reasons:
             lines.append('; '.join(_(REASON_LABELS[reason]) for reason in decision.reasons))
         source = source_for(file, 'genre') if file.dlmtags_tag_sources.get('genre') else ''
@@ -289,8 +294,10 @@ class MatchingResults(QtWidgets.QWidget):
         model = self.table.model()
         model.removeRows(0, model.rowCount())
         self.table.hide()
-        if decision is None or decision.outcome != Outcome.NEEDS_REVIEW or not (
-            {Reason.CLOSE_SCORES, Reason.SOURCE_DISAGREEMENT} & set(decision.reasons)
+        if (
+            decision is None
+            or decision.outcome != Outcome.NEEDS_REVIEW
+            or not ({Reason.CLOSE_SCORES, Reason.SOURCE_DISAGREEMENT} & set(decision.reasons))
         ):
             return
         groups = {}
@@ -328,7 +335,8 @@ class MatchingResults(QtWidgets.QWidget):
         else:
             stage = _('Searching...')
         self.elapsed_label.setText(
-            _('%(stage)s %(elapsed)s') % {
+            _('%(stage)s %(elapsed)s')
+            % {
                 'stage': stage,
                 'elapsed': f'{minutes:02d}:{seconds:02d}',
             }
@@ -341,6 +349,13 @@ ARTWORK_COLUMN_MIN_WIDTH = 130
 ARTWORK_COLUMN_MAX_WIDTH = 200
 ARTWORK_STACKED_HEIGHT = 190
 QWIDGETSIZE_MAX = 16777215
+TOOLBAR_ICON_SIZE = QtCore.QSize(26, 26)
+
+
+def _toolbar_icon(name):
+    """Load a bundled DLMtags SVG independent of the process working directory."""
+    path = os.path.join(os.path.dirname(__file__), 'icons', name)
+    return QtGui.QIcon(path)
 
 
 class DLMtagsWorkspace(QtWidgets.QWidget):
@@ -359,26 +374,44 @@ class DLMtagsWorkspace(QtWidgets.QWidget):
         actions.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._window = window
         self._artwork_stacked = None
-        for action_id in (MainAction.AUTOTAG, MainAction.ANALYZE, MainAction.SAVE, MainAction.SHOW_COVER_ART):
+        toolbar_action_ids = {MainAction.ANALYZE, MainAction.SAVE}
+        for action_id, action in window.action_map.items():
+            if action is not None and action_id not in toolbar_action_ids:
+                action.setShortcut(QtGui.QKeySequence())
+        bulk_action = QtGui.QAction(_('Bulk Auto-Tag'), actions)
+        bulk_action.setIcon(_toolbar_icon('bulk-auto-tag.svg'))
+        bulk_action.setObjectName('dlmtags_bulk_auto_tag_action')
+        bulk_action.setToolTip(_('Scan selected songs and review proposed tags'))
+        bulk_action.triggered.connect(lambda: BulkAutoTagDialog(window).exec())
+        self.bulk_action = bulk_action
+        window.file_sidebar.selected_songs_changed.connect(self._update_bulk_action)
+        self._update_bulk_action()
+        actions.addAction(bulk_action)
+        bulk_button = actions.widgetForAction(bulk_action)
+        if bulk_button is not None:
+            style_component(bulk_button, 'actionButton')
+            bulk_button.setIconSize(TOOLBAR_ICON_SIZE)
+        for action_id in (MainAction.ANALYZE, MainAction.SAVE):
             action = window.action_map[action_id]
+            if action_id == MainAction.ANALYZE:
+                action.setIcon(_toolbar_icon('scan.svg'))
+            elif action_id == MainAction.SAVE:
+                action.setIcon(_toolbar_icon('save.svg'))
             actions.addAction(action)
-            style_component(actions.widgetForAction(action), 'actionButton')
-        # The legacy Picard menu bar is hidden in DLMtags. Keep setup reachable
-        # from an explicit, always-visible toolbar action.
+            button = actions.widgetForAction(action)
+            style_component(button, 'actionButton')
+            if action_id in {MainAction.ANALYZE, MainAction.SAVE}:
+                button.setIconSize(TOOLBAR_ICON_SIZE)
+        # Keep settings reachable from the DLMtags toolbar.
         settings_action = QtGui.QAction(_('Settings'), actions)
+        settings_action.setIcon(_toolbar_icon('settings.svg'))
         settings_action.setObjectName('dlmtags_settings_action')
         settings_action.setToolTip(_('Configure music sources and other settings'))
-        settings_action.triggered.connect(lambda checked=False: window.show_setup_wizard(force=True))
+        settings_action.triggered.connect(lambda checked=False: window.show_options())
         actions.addAction(settings_action)
-        style_component(actions.widgetForAction(settings_action), 'actionButton')
-        menu = QtWidgets.QMenu('…', actions)
-        menu.menuAction().setToolTip(_('Additional actions'))
-        for action in window.menuBar().actions():
-            menu.addAction(action)
-        actions.addAction(menu.menuAction())
-        overflow = actions.widgetForAction(menu.menuAction())
-        overflow.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
-        style_component(overflow, 'actionButton')
+        settings_button = actions.widgetForAction(settings_action)
+        style_component(settings_button, 'actionButton')
+        settings_button.setIconSize(TOOLBAR_ICON_SIZE)
         layout.addWidget(actions)
 
         self.sections = Splitter(QtCore.Qt.Orientation.Vertical, self)
@@ -413,9 +446,11 @@ class DLMtagsWorkspace(QtWidgets.QWidget):
         self.sections.setStretchFactor(0, 45)
         self.sections.setStretchFactor(1, 55)
         self.sections.setSizes([450, 550])
-
         window.metadata_box.presentation_changed.connect(self._selection_changed)
         self._selection_changed()
+
+    def _update_bulk_action(self):
+        self.bulk_action.setEnabled(bool(self._window.file_sidebar._selected_paths()))
 
     def _make_artwork_panel(self, window):
         self.artwork_panel = Card(shadow=True)
@@ -474,9 +509,13 @@ class DLMtagsWorkspace(QtWidgets.QWidget):
             self._arrange_artwork()
             return False
         thumbnails = (self._window.cover_art_box.cover_art, self._window.cover_art_box.orig_cover_art)
-        if (any(watched is thumbnail for thumbnail in thumbnails) and event.type() == QtCore.QEvent.Type.MouseButtonRelease
-                and event.button() == QtCore.Qt.MouseButton.LeftButton
-                and watched.rect().contains(event.position().toPoint()) and watched.data):
+        if (
+            any(watched is thumbnail for thumbnail in thumbnails)
+            and event.type() == QtCore.QEvent.Type.MouseButtonRelease
+            and event.button() == QtCore.Qt.MouseButton.LeftButton
+            and watched.rect().contains(event.position().toPoint())
+            and watched.data
+        ):
             pixmap = QtGui.QPixmap()
             if pixmap.loadFromData(watched.data[0].data):
                 dialog = QtWidgets.QDialog(self._window)
@@ -502,6 +541,10 @@ class CoverPreview(QtWidgets.QLabel):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.setPixmap(self._original.scaled(
-            self.size(), QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation,
-        ))
+        self.setPixmap(
+            self._original.scaled(
+                self.size(),
+                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+        )

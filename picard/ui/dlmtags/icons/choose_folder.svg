@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Choose Folder">
+  <defs>
+    <linearGradient id="disc" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#37C2E8"/>
+      <stop offset="1" stop-color="#1675D1"/>
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="29" fill="url(#disc)"/>
+  <path d="M13.5 23.5c0-2.2 1.8-4 4-4h11l4.5 5h13.5c2.2 0 4 1.8 4 4V44c0 2.2-1.8 4-4 4h-29c-2.2 0-4-1.8-4-4V23.5Z" fill="none" stroke="white" stroke-width="3.5" stroke-linejoin="round"/>
+  <path d="M14.5 29.5h35" fill="none" stroke="white" stroke-width="3" stroke-linecap="round"/>
+  <path d="M31.5 34v9m-4.5-4.5h9" fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+</svg>

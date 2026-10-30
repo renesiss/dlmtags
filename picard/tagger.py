@@ -242,6 +242,7 @@ class Tagger(QtWidgets.QApplication):
         with unset_env_vars(*(('LANG',) if IS_MACOS else ())):
             super().__init__(sys.argv)
         self.__class__.__instance = self
+        self.setApplicationDisplayName('DLMtags')
         self._setup_app_icon()
         self._init_properties_from_args_or_env(cmdline_args)
         init_options()
@@ -288,19 +289,7 @@ class Tagger(QtWidgets.QApplication):
         self.stopping = False
 
     def _setup_app_icon(self):
-        icon = QtGui.QIcon()
-        if IS_MACOS:
-            sizes = (16, 32, 128, 256, 512)
-            icon_name = 'macos_icon'
-        else:
-            sizes = (16, 24, 32, 48, 128, 256, 512)
-            icon_name = PICARD_APP_ID
-        for size in sizes:
-            icon.addFile(
-                f":/images/{size}x{size}/{icon_name}.png",
-                QtCore.QSize(size, size),
-            )
-        self.setWindowIcon(icon)
+        self.setWindowIcon(QtGui.QIcon(':/images/dlmtags-icon.png'))
 
     def _init_properties_from_args_or_env(self, cmdline_args):
         """Initialize properties from command line arguments or environment"""
@@ -1084,7 +1073,9 @@ class Tagger(QtWidgets.QApplication):
         """Dispatch file loads using time-budgeted batching."""
 
         def callback(file, **kwargs):
-            self._file_loaded(file, target=target, unmatched_files=unmatched_files, metadata_only=metadata_only, **kwargs)
+            self._file_loaded(
+                file, target=target, unmatched_files=unmatched_files, metadata_only=metadata_only, **kwargs
+            )
             if on_loaded is not None:
                 on_loaded(file)
 
@@ -1693,7 +1684,7 @@ def show_standalone_messagebox(message, informative_text=None):
         app = QtWidgets.QApplication(sys.argv)
     msgbox = QtWidgets.QMessageBox()
     msgbox.setIcon(QtWidgets.QMessageBox.Icon.Information)
-    msgbox.setWindowTitle(f"{PICARD_ORG_NAME} {PICARD_APP_NAME}")
+    msgbox.setWindowTitle('DLMtags')
     msgbox.setTextFormat(QtCore.Qt.TextFormat.PlainText)
     font = msgbox.font()
     font.setFamily(FONT_FAMILY_MONOSPACE)
@@ -1863,7 +1854,7 @@ def setup_application():
     # Some libs (ie. Phonon) require those to be set
     QtWidgets.QApplication.setApplicationName(PICARD_APP_NAME)
     QtWidgets.QApplication.setOrganizationName(PICARD_ORG_NAME)
-    QtWidgets.QApplication.setDesktopFileName(PICARD_APP_ID)
+    QtWidgets.QApplication.setDesktopFileName('dlmtags')
 
     # HighDpiScaleFactorRoundingPolicy is available since Qt 5.14. This is
     # required to support fractional scaling on Windows properly.

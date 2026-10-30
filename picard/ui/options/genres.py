@@ -37,6 +37,10 @@ from picard.ui.options import (
     OptionsPage,
     PageOptionConfigs,
 )
+from picard.ui.options.dlmtags import (
+    connect_api_key_sync,
+    load_api_key,
+)
 from picard.ui.playground import Playground
 
 
@@ -86,9 +90,7 @@ class GenresOptionsPage(OptionsPage):
         'join_genres': {'widgets': ['join_genres']},
         'genres_filter': {'widgets': ['genres_filter']},
         'dlmtags_discogs_enabled': {'widgets': ['dlmtags_discogs_enabled']},
-        'dlmtags_discogs_token': {'widgets': ['dlmtags_discogs_token']},
         'smart_genre_lastfm_enabled': {'widgets': ['smart_genre_lastfm_enabled']},
-        'lastfm_api_key': {'widgets': ['lastfm_api_key']},
     }
 
     def __init__(self, parent=None):
@@ -124,10 +126,16 @@ class GenresOptionsPage(OptionsPage):
         ):
             widget = QtWidgets.QLineEdit(providers)
             widget.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+            connect_api_key_sync(widget, option)
             setattr(self.ui, option, widget)
             form.addRow(label, widget)
-        notice = QtWidgets.QLabel(_('Credentials are stored locally in Picard settings without encryption. '
-                                   'Missing credentials disable only that provider.'), providers)
+        notice = QtWidgets.QLabel(
+            _(
+                'Credentials are stored locally in Picard settings without encryption. '
+                'Missing credentials disable only that provider.'
+            ),
+            providers,
+        )
         notice.setWordWrap(True)
         form.addRow(notice)
         self.ui.verticalLayout.addWidget(providers)
@@ -137,7 +145,7 @@ class GenresOptionsPage(OptionsPage):
         for option in ('dlmtags_discogs_enabled', 'smart_genre_lastfm_enabled'):
             getattr(self.ui, option).setChecked(config.setting[option])
         for option in ('dlmtags_discogs_token', 'lastfm_api_key'):
-            getattr(self.ui, option).setText(config.setting[option])
+            load_api_key(getattr(self.ui, option), option, config.setting[option])
         self.ui.use_genres.setChecked(config.setting['use_genres'])
         self.ui.max_genres.setValue(config.setting["max_genres"])
         self.ui.min_genre_usage.setValue(config.setting["min_genre_usage"])

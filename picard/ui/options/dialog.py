@@ -84,6 +84,7 @@ from picard.ui.options import (  # noqa: F401 # pylint: disable=unused-import
     cdlookup,
     cover,
     cover_processing,
+    dlmtags,
     fingerprinting,
     general,
     genres,
@@ -113,6 +114,10 @@ from picard.ui.options import (  # noqa: F401 # pylint: disable=unused-import
     tags_compatibility_ac3,
     tags_compatibility_id3,
     tags_compatibility_wave,
+)
+from picard.ui.options.dlmtags import (
+    DLMTAGS_SETTINGS_PAGE_NAMES,
+    DLMtagsSettingsNavigation,
 )
 from picard.ui.theme import theme as _theme
 from picard.ui.util import add_accept_button
@@ -255,6 +260,10 @@ class OptionsDialog(PicardDialog, SingletonDialog):
         page_classes = (cls for cls in self._page_classes if cls.PARENT == parent_pagename)
         items = []
         for PageCls in sorted(page_classes, key=lambda p: (p.SORT_ORDER, p.NAME)):
+            if (self.dlmtags_mode and PageCls.NAME not in DLMTAGS_SETTINGS_PAGE_NAMES) or (
+                not self.dlmtags_mode and PageCls.NAME in DLMTAGS_SETTINGS_PAGE_NAMES
+            ):
+                continue
             # Check if this is a plugin option page and if the plugin is enabled
             page_active = PageCls.ACTIVE
             api = getattr(PageCls, 'api', None)
@@ -304,6 +313,7 @@ class OptionsDialog(PicardDialog, SingletonDialog):
 
     def __init__(self, default_page=None, parent=None):
         super().__init__(parent=parent)
+        self.dlmtags_mode = bool(getattr(parent, 'modern_workspace', None))
         if DebugOpt.TIMINGS.enabled:
             _init_t0 = time.perf_counter_ns()
         if modal_options():
@@ -326,6 +336,9 @@ class OptionsDialog(PicardDialog, SingletonDialog):
 
         self.ui = Ui_OptionsDialog()
         self.ui.setupUi(self)
+        if self.dlmtags_mode:
+            self.resize(780, 480)
+            self.setMinimumSize(620, 360)
 
         # Each page is wrapped in a QScrollArea inside the stacked widget.
         # This ensures pages that exceed available height are scrollable,
@@ -376,6 +389,11 @@ class OptionsDialog(PicardDialog, SingletonDialog):
         self.ui.buttonbox.addButton(self.ui.attached_profiles_button, QtWidgets.QDialogButtonBox.ButtonRole.ActionRole)
         self.ui.attached_profiles_button.clicked.connect(self.show_attached_profiles_dialog)
 
+        if self.dlmtags_mode:
+            self.ui.reset_all_button.hide()
+            self.ui.attached_profiles_button.hide()
+            self.ui.buttonbox.button(QtWidgets.QDialogButtonBox.StandardButton.Help).hide()
+
         config = get_config()
 
         # Store page classes for tree building; instances are created lazily.
@@ -385,6 +403,7 @@ class OptionsDialog(PicardDialog, SingletonDialog):
         self.item_to_page = {}
         self.pagename_to_item = {}
         self.default_item = None
+        self.settings_navigation = None
         if not default_page:
             default_page = config.persist['options_last_active_page']
         self._default_page = default_page
@@ -392,9 +411,19 @@ class OptionsDialog(PicardDialog, SingletonDialog):
         with DebugOpt.TIMINGS.timing("OptionsDialog: add_pages"):
             self.add_pages(None, default_page, self.ui.pages_tree)
 
+        if self.dlmtags_mode:
+            self.settings_navigation = DLMtagsSettingsNavigation()
+            self.settings_navigation.page_selected.connect(self._select_settings_nav_page)
+            self.ui.dialog_splitter.replaceWidget(0, self.settings_navigation)
+            self.ui.pages_tree.hide()
+
         # work-around to set optimal option pane width
         self.ui.pages_tree.expandAll()
-        max_page_name = self.ui.pages_tree.sizeHintForColumn(0) + 2 * self.ui.pages_tree.frameWidth()
+        max_page_name = (
+            170
+            if self.settings_navigation
+            else self.ui.pages_tree.sizeHintForColumn(0) + 2 * self.ui.pages_tree.frameWidth()
+        )
         self.ui.dialog_splitter.setSizes([max_page_name, self.geometry().width() - max_page_name])
 
         self.ui.pages_tree.setHeaderLabels([""])
@@ -406,7 +435,7 @@ class OptionsDialog(PicardDialog, SingletonDialog):
         # Load only pages needed for init signals and the visible page.
         # Other pages are loaded lazily on first visit in switch_page().
         with DebugOpt.TIMINGS.timing("OptionsDialog: load initial pages"):
-            maintenance_page = self._load_page('maintenance')
+            maintenance_page = None if self.dlmtags_mode else self._load_page('maintenance')
             profile_page = self._load_page('profiles')
 
         if maintenance_page and maintenance_page.loaded:
@@ -707,7 +736,11 @@ class OptionsDialog(PicardDialog, SingletonDialog):
         """Get a page instance by name, instantiating lazily if needed."""
         if pagename in self._page_instances:
             return self._page_instances[pagename]
-        PageCls = self.item_to_page[self.pagename_to_item[pagename]]
+        item = self.pagename_to_item.get(pagename)
+        if item is not None:
+            PageCls = self.item_to_page[item]
+        else:
+            PageCls = next(page for page in self._page_classes if page.NAME == pagename)
         return self._instantiate_page(PageCls)
 
     def _instantiate_page(self, PageCls):
@@ -799,6 +832,8 @@ class OptionsDialog(PicardDialog, SingletonDialog):
         if items:
             PageCls = self.item_to_page[items[0]]
             page = self._load_page(PageCls.NAME)
+            if self.settings_navigation:
+                self.settings_navigation.set_current_page(page.NAME)
             self.set_profiles_button_and_highlight(page)
             self.ui.reset_button.setDisabled(not page.loaded)
             self._show_page(page)
@@ -811,9 +846,18 @@ class OptionsDialog(PicardDialog, SingletonDialog):
             log.debug("switch_page: Saving page '%s' to options_last_active_page", page.NAME)
             config.persist['options_last_active_page'] = page.NAME
 
+    def _select_settings_nav_page(self, pagename):
+        item = self.pagename_to_item.get(pagename)
+        if item is not None:
+            self.ui.pages_tree.setCurrentItem(item)
+
     def disable_page(self, pagename):
-        item = self.pagename_to_item[pagename]
-        item.setDisabled(True)
+        # DLMtags intentionally excludes most Picard pages from its navigation.
+        # Some hidden pages are still initialized for backend signals, so a
+        # load failure must not assume that every page has a visible tree item.
+        item = self.pagename_to_item.get(pagename)
+        if item is not None:
+            item.setDisabled(True)
 
     def refresh_plugin_pages(self):
         """Refresh plugin option pages based on current plugin state."""

@@ -25,19 +25,22 @@ from picard.ui.dlmtags.components.table import CompactTable
 class ConfirmResultsDialog(QtWidgets.QDialog):
     """Choose and confirm the recording of the file's current review."""
 
-    def __init__(self, file, parent=None):
+    def __init__(self, file, parent=None, *, allowed_tags=None):
         super().__init__(parent)
         self.setObjectName('dlmtags_confirm_results')
         self.setWindowTitle(_('Confirm Results'))
         self.resize(820, 360)
+        self.setMinimumSize(680, 360)
         self.file = file
+        self.allowed_tags = frozenset(allowed_tags) if allowed_tags is not None else None
         self.decision = file.smart_scan_decision
         self.recordings = file.confirmable_recordings()
         layout = QtWidgets.QVBoxLayout(self)
 
         reasons = '; '.join(_(REASON_LABELS[reason]) for reason in getattr(self.decision, 'reasons', ()))
         self.reason_label = QtWidgets.QLabel(
-            _('Smart Scan could not verify the recording automatically: %s') % reasons, self,
+            _('Smart Scan could not verify the recording automatically: %s') % reasons,
+            self,
         )
         self.reason_label.setWordWrap(True)
         layout.addWidget(self.reason_label)
@@ -45,40 +48,67 @@ class ConfirmResultsDialog(QtWidgets.QDialog):
         self.table = CompactTable(self)
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
         model = QtGui.QStandardItemModel(self)
-        model.setHorizontalHeaderLabels([_('Artist'), _('Title'), _('Recording MBID'), _('Review reasons')])
+        model.setHorizontalHeaderLabels(
+            [
+                _('Artist'),
+                _('Title / Version'),
+                _('Duration'),
+                _('AcoustID score'),
+                _('Release'),
+                _('Review reasons'),
+            ]
+        )
         for recording in self.recordings:
+            candidate = next(
+                (item for item in self.decision.candidates if item.recording_id == recording.recording_id), None
+            )
+            version = ', '.join(candidate.versions) if candidate else ''
+            title = recording.title + (f' ({version})' if version else '')
+            release = (
+                '; '.join(f'{item.title} ({item.date})' if item.date else item.title for item in candidate.releases)
+                if candidate
+                else ''
+            )
             values = (
                 recording.artist or _('Artist credit not available'),
-                recording.title,
-                recording.recording_id,
+                title,
+                f'{candidate.length / 1000:.1f} s' if candidate and candidate.length is not None else '',
+                f'{candidate.fingerprint_score:.1%}' if candidate and candidate.fingerprint_score is not None else '',
+                release,
                 '; '.join(_(REASON_LABELS[reason]) for reason in recording.reasons),
             )
             row = []
             for value in values:
                 item = QtGui.QStandardItem(value)
                 item.setEditable(False)
-                item.setToolTip(value)
+                item.setToolTip(_('Recording ID: %s') % recording.recording_id if value == title else value)
                 if not recording.confirmable:
                     item.setEnabled(False)
                     item.setToolTip(_('The MusicBrainz artist credit is not available. Scan again to retry.'))
                 row.append(item)
             model.appendRow(row)
         self.table.setModel(model)
+        self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.horizontalHeader().setStretchLastSection(True)
         self.table.selectionModel().selectionChanged.connect(self._update_buttons)
         layout.addWidget(self.table, 1)
 
         edits = self.file.manual_identity_edits()
         names = {'artist': _('Artist'), 'title': _('Title')}
         self.replace_check = QtWidgets.QCheckBox(
-            _('Replace my edits of %s') % ', '.join(names[tag] for tag in edits), self,
+            _('Replace my edits of %s') % ', '.join(names[tag] for tag in edits),
+            self,
         )
         self.replace_check.setVisible(bool(edits))
         layout.addWidget(self.replace_check)
 
-        note = QtWidgets.QLabel(_(
-            'Confirming applies Artist and Title to New Tags, then looks for album, year, genre, '
-            'style and artwork suggestions to review. Nothing is saved to the file.'
-        ), self)
+        note = QtWidgets.QLabel(
+            _(
+                'Confirming applies Artist and Title to New Tags, then looks for album, year, genre, '
+                'style and artwork suggestions to review. Nothing is saved to the file.'
+            ),
+            self,
+        )
         note.setWordWrap(True)
         note.setProperty('dlmtagsHint', True)
         layout.addWidget(note)
@@ -117,12 +147,22 @@ class ConfirmResultsDialog(QtWidgets.QDialog):
         if recording is None:
             return
         if not self.file.confirm_recording(
-            self.decision, recording.recording_id, replace_manual=self.replace_check.isChecked(),
+            self.decision,
+            recording.recording_id,
+            replace_manual=self.replace_check.isChecked(),
         ):
             self.error_label.setText(_('The song changed since this window opened. Close it and scan again.'))
             self.error_label.show()
             self.confirm_button.setEnabled(False)
             return
+        if self.allowed_tags is not None:
+            self.file.dlmtags_tag_suggestions = {
+                tag: suggestion
+                for tag, suggestion in self.file.dlmtags_tag_suggestions.items()
+                if tag in self.allowed_tags
+            }
+            if 'date' not in self.allowed_tags:
+                self.file.dlmtags_date_suggestion = None
         super().accept()
 
 

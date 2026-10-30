@@ -4,15 +4,16 @@
 """Album suggestions, recognition state and inline Artwork, with mocked services only."""
 
 from types import SimpleNamespace
-import uuid
 from unittest.mock import (
     MagicMock,
     patch,
 )
+import uuid
 
 from PyQt6 import (
     QtCore,
     QtGui,
+    QtNetwork,
     QtWidgets,
 )
 from PyQt6.QtNetwork import QNetworkReply
@@ -32,6 +33,9 @@ from test.test_smartscan import (
     release,
 )
 
+from picard.config import get_config
+from picard.coverart.image import CaaCoverArtImage
+from picard.extension_points.options_pages import ext_point_options_pages
 from picard.file import File
 from picard.metadata import Metadata
 from picard.smartscan import (
@@ -40,12 +44,13 @@ from picard.smartscan import (
 )
 from picard.tagprovenance import source_for
 
-from picard.ui.dlmtags.confirm_results import ConfirmResultsDialog
+from picard.ui.dlmtags.api_credentials import API_PROVIDERS
 from picard.ui.dlmtags.artwork import (
     MAX_RELEASES,
     ArtworkSearch,
     ArtworkSuggestions,
 )
+from picard.ui.dlmtags.confirm_results import ConfirmResultsDialog
 from picard.ui.dlmtags.suggestions import (
     Status,
     album_search_status,
@@ -55,6 +60,17 @@ from picard.ui.dlmtags.tag_editor import PRIMARY_TAGS
 from picard.ui.dlmtags.tag_form import TagEditor
 from picard.ui.dlmtags.workspace import MatchingResults
 from picard.ui.enums import MainAction
+from picard.ui.options.dialog import OptionsDialog
+from picard.ui.options.dlmtags import (
+    DEFAULT_VISIBLE_TAGS,
+    DLMTAGS_SETTINGS_PAGE_NAMES,
+    DLMtagsApiKeysOptionsPage,
+    DLMtagsFileSettingsOptionsPage,
+    DLMtagsGeneralOptionsPage,
+    DLMtagsSettingsNavigation,
+    VisibleTagsOptionsPage,
+)
+from picard.ui.options.genres import GenresOptionsPage
 
 
 def mbid(name):
@@ -73,13 +89,24 @@ def png(color):
 class InlineTestCase(PicardTestCase):
     def setUp(self):
         super().setUp()
-        self.set_config_values(dict(
-            BASE_SETTINGS, use_genres=False, max_genres=5, genres_filter='', join_genres='',
-            folksonomy_tags=False, only_my_genres=False, min_genre_usage=50,
-            smart_genre_lastfm_enabled=False, lastfm_api_key='',
-            dlmtags_discogs_enabled=False, dlmtags_discogs_token='',
-            caa_image_size=500, load_image_behavior='append',
-        ))
+        self.set_config_values(
+            dict(
+                BASE_SETTINGS,
+                use_genres=False,
+                max_genres=5,
+                genres_filter='',
+                join_genres='',
+                folksonomy_tags=False,
+                only_my_genres=False,
+                min_genre_usage=50,
+                smart_genre_lastfm_enabled=False,
+                lastfm_api_key='',
+                dlmtags_discogs_enabled=False,
+                dlmtags_discogs_token='',
+                caa_image_size=500,
+                load_image_behavior='append',
+            )
+        )
         self.patch_tagger_instance('picard.item')
         self.tagger.window = MagicMock()
         self.tagger.acoustidmanager = MagicMock()
@@ -193,6 +220,66 @@ class TagFormSuggestionTest(InlineTestCase):
         self.addCleanup(editor.deleteLater)
         return editor
 
+    def test_visible_tags_hide_rows_without_changing_saved_metadata(self):
+        self.file.orig_metadata['album'] = 'Original Album'
+        self.file.metadata['album'] = 'Original Album'
+        self.set_config_values({'dlmtags_visible_tags': list(DEFAULT_VISIBLE_TAGS)})
+        editor = self.editor()
+        self.assertTrue(editor._primary_pairs['album'][0].isHidden())
+        self.assertTrue(editor._primary_pairs['album'][1].isHidden())
+        self.assertEqual('Original Album', self.file.metadata['album'])
+
+        self.tagger.save_thread_pool = MagicMock()
+        self.tagger._saving_files_count = 0
+        with patch('picard.file.thread.run_task') as run_task:
+            self.file.save()
+
+        saved_metadata = run_task.call_args.args[0].args[1]
+        self.assertEqual('Original Album', saved_metadata['album'])
+
+    def test_api_key_fields_sync_across_settings_pages(self):
+        host = QtWidgets.QWidget()
+        self.addCleanup(host.deleteLater)
+        with patch('picard.ui.options.tagger_instance', return_value=self.tagger):
+            api_page = DLMtagsApiKeysOptionsPage(host)
+            genres_page = GenresOptionsPage(host)
+        api_page.load()
+        api_page.api_key_widgets['dlmtags_discogs_token'].setText('discogs-secret')
+        genres_page.load()
+
+        self.assertEqual('discogs-secret', api_page.api_key_widgets['dlmtags_discogs_token'].text())
+        self.assertEqual('discogs-secret', genres_page.ui.dlmtags_discogs_token.text())
+        genres_page.ui.dlmtags_discogs_token.setText('discogs-from-genres')
+        self.assertEqual('discogs-from-genres', api_page.api_key_widgets['dlmtags_discogs_token'].text())
+        api_page.api_key_widgets['lastfm_api_key'].setText('lastfm-secret')
+        self.assertEqual('lastfm-secret', genres_page.ui.lastfm_api_key.text())
+        api_page.save()
+        config = get_config()
+        self.assertEqual('discogs-from-genres', config.setting['dlmtags_discogs_token'])
+        self.assertEqual('lastfm-secret', config.setting['lastfm_api_key'])
+        self.assertEqual(QtWidgets.QLineEdit.EchoMode.Password, api_page.api_key_widgets['lastfm_api_key'].echoMode())
+
+    def test_visible_tags_defaults_persist_in_field_order(self):
+        with patch('picard.ui.options.tagger_instance', return_value=self.tagger):
+            page = VisibleTagsOptionsPage()
+        self.addCleanup(page.deleteLater)
+        page.load()
+        self.assertEqual(list(DEFAULT_VISIBLE_TAGS), [tag for tag, check in page.checks.items() if check.isChecked()])
+        self.file.orig_metadata['album'] = 'Original Album'
+        self.file.metadata['album'] = 'Original Album'
+        editor = self.editor()
+        editor.box.update.side_effect = editor.refresh
+        page.tagger = SimpleNamespace(window=SimpleNamespace(metadata_box=editor.box))
+        page.checks['album'].setChecked(True)
+        page.save()
+        self.assertFalse(editor._primary_pairs['album'][0].isHidden())
+        self.assertFalse(editor._primary_pairs['album'][1].isHidden())
+        self.assertEqual(
+            ['title', 'artist', 'album', 'date', 'genre'],
+            get_config().setting['dlmtags_visible_tags'],
+        )
+        self.assertEqual('Original Album', self.file.metadata['album'])
+
     def test_suggestion_is_an_orange_preview_not_a_value(self):
         self.scan(releases=[release('lp', 'The Album', '2024')])
         editor = self.editor()
@@ -238,9 +325,16 @@ class TagFormSuggestionTest(InlineTestCase):
         self.file.metadata.length = 216000
         self.file.start_smart_scan()
         self.tagger._acoustid.analyze.call_args.args[1]({'recordings': []}, None, None)
-        self.tagger.mb_api.find_tracks.call_args.args[0]({'recordings': [
-            recording('solo', 'Song', 'Artist', 200000), recording('duet', 'Song', ('Artist', 'Friend'), 200000),
-        ]}, None, None)
+        self.tagger.mb_api.find_tracks.call_args.args[0](
+            {
+                'recordings': [
+                    recording('solo', 'Song', 'Artist', 200000),
+                    recording('duet', 'Song', ('Artist', 'Friend'), 200000),
+                ]
+            },
+            None,
+            None,
+        )
         self.assertEqual(Outcome.NEEDS_REVIEW, self.file.smart_scan_decision.outcome)
 
     def test_single_candidate_is_confirmed_directly_from_new_tags(self):
@@ -250,18 +344,23 @@ class TagFormSuggestionTest(InlineTestCase):
         self.assertEqual('Confirm', editor.confirm_results_button.text())
         self.assertIn('P!nk + Willow Sage Hart — Cover Me in Sunshine', editor.confirm_message.text())
         self.assertIn('Length mismatch', editor.confirm_message.text())
-        with patch('picard.ui.dlmtags.tag_form.ConfirmResultsDialog') as dialog, \
-                patch.object(File, 'save') as save:
+        with patch('picard.ui.dlmtags.tag_form.ConfirmResultsDialog') as dialog, patch.object(File, 'save') as save:
             editor.confirm_results_button.click()
         dialog.assert_not_called()
         save.assert_not_called()
         decision = self.file.smart_scan_decision
-        self.assertEqual((Outcome.MATCHED, True, PINK_RECORDING), (
-            decision.outcome, decision.user_confirmed, decision.recording_id,
-        ))
+        self.assertEqual(
+            (Outcome.MATCHED, True, PINK_RECORDING),
+            (
+                decision.outcome,
+                decision.user_confirmed,
+                decision.recording_id,
+            ),
+        )
         self.assertIn(Reason.LENGTH_MISMATCH, decision.notes)
         self.assertEqual(
-            ('P!nk + Willow Sage Hart', 'Cover Me in Sunshine'), (self.file.metadata['artist'], self.file.metadata['title']),
+            ('P!nk + Willow Sage Hart', 'Cover Me in Sunshine'),
+            (self.file.metadata['artist'], self.file.metadata['title']),
         )
         self.assertEqual('MusicBrainz', source_for(self.file, 'artist'))
         # The remaining tags are searched with the existing album suggestions.
@@ -279,7 +378,8 @@ class TagFormSuggestionTest(InlineTestCase):
             editor.confirm_results_button.click()
         dialog.assert_not_called()
         self.assertEqual(
-            ('P!nk + Willow Sage Hart', 'My Title'), (self.file.metadata['artist'], self.file.metadata['title']),
+            ('P!nk + Willow Sage Hart', 'My Title'),
+            (self.file.metadata['artist'], self.file.metadata['title']),
         )
 
     def test_several_plausible_candidates_open_the_selection_dialog(self):
@@ -322,7 +422,9 @@ class TagFormSuggestionTest(InlineTestCase):
         self.assertTrue(editor.confirm_banner.isHidden())
         # Failed credit lookup: still nothing that can be confirmed.
         self.tagger.mb_api.get_track_by_id.call_args.args[1](
-            b'', None, QNetworkReply.NetworkError.ServiceUnavailableError,
+            b'',
+            None,
+            QNetworkReply.NetworkError.ServiceUnavailableError,
         )
         editor.refresh()
         self.assertTrue(editor.confirm_banner.isHidden())
@@ -342,7 +444,6 @@ class TagFormSuggestionTest(InlineTestCase):
         self.assertEqual('The Album', editor._rows['album'][2].text())
         self.assertEqual('MusicBrainz', editor._source_labels['album'].text())
         self.assertEqual('', editor._source_labels['album'].styleSheet())
-
 
     def test_album_search_icon_is_visible_and_opens_find_tag(self):
         self.scan(releases=[release('lp', 'The Album', '2024')])
@@ -371,11 +472,254 @@ class TagFormSuggestionTest(InlineTestCase):
         self.assertTrue(editor._find_buttons['album'].isEnabled())
 
 
+class DLMtagsSettingsVisibilityTest(InlineTestCase):
+    def api_keys_page(self):
+        with patch('picard.ui.options.tagger_instance', return_value=self.tagger):
+            page = DLMtagsApiKeysOptionsPage()
+        self.addCleanup(page.deleteLater)
+        page.load()
+        return page
+
+    def test_api_key_edit_connect_and_save_cancel_semantics(self):
+        self.set_config_values(
+            {
+                'dlmtags_discogs_enabled': True,
+                'dlmtags_discogs_token': 'saved-token',
+            }
+        )
+        page = self.api_keys_page()
+        edit = page.api_key_widgets['dlmtags_discogs_token']
+        self.assertTrue(edit.isReadOnly())
+        page.edit_buttons['discogs'].click()
+        self.assertFalse(edit.isReadOnly())
+        edit.setText('pending-token')
+        self.assertEqual('saved-token', get_config().setting['dlmtags_discogs_token'])
+        with patch('picard.ui.options.dlmtags.QtGui.QDesktopServices.openUrl') as open_url:
+            page.connect_buttons['discogs'].click()
+            page.connect_buttons['lastfm'].click()
+        self.assertEqual(2, open_url.call_count)
+        self.assertEqual(
+            API_PROVIDERS['discogs']['connect_url'],
+            open_url.call_args_list[0].args[0].toString(),
+        )
+        self.assertEqual(
+            API_PROVIDERS['lastfm']['connect_url'],
+            open_url.call_args_list[1].args[0].toString(),
+        )
+        # Without page.save(), rejecting Settings leaves the stored key unchanged.
+        self.assertEqual('saved-token', get_config().setting['dlmtags_discogs_token'])
+        page.save()
+        self.assertEqual('pending-token', get_config().setting['dlmtags_discogs_token'])
+
+    def test_api_key_test_requires_verified_provider_response_and_handles_timeout(self):
+        class FakeReply(QtCore.QObject):
+            finished = QtCore.pyqtSignal()
+
+            def __init__(self, payload, status=200, error=QtNetwork.QNetworkReply.NetworkError.NoError):
+                super().__init__()
+                self.payload = payload
+                self.status = status
+                self.network_error = error
+
+            def error(self):
+                return self.network_error
+
+            def errorString(self):
+                return 'simulated network failure'
+
+            def attribute(self, attribute):
+                return self.status
+
+            def readAll(self):
+                return QtCore.QByteArray(self.payload)
+
+        class FakeNetwork:
+            def __init__(self, reply):
+                self.reply = reply
+                self.request = None
+
+            def get(self, request):
+                self.request = request
+                return self.reply
+
+        self.set_config_values(
+            {
+                'dlmtags_discogs_enabled': True,
+                'dlmtags_discogs_token': 'test-token',
+            }
+        )
+        page = self.api_keys_page()
+        reply = FakeReply(b'{"username":"verified-user"}')
+        network = FakeNetwork(reply)
+        page.credential_tester._network = network
+        self.assertEqual('Not Tested', page.status_labels['discogs'].text())
+        self.assertEqual(
+            QtWidgets.QLineEdit.EchoMode.Password,
+            page.api_key_widgets['dlmtags_discogs_token'].echoMode(),
+        )
+        self.assertIn(
+            'API Keys',
+            [label.text() for label in page.findChildren(QtWidgets.QLabel) if label.property('dlmtagsApiTitle')],
+        )
+        for provider in ('discogs', 'lastfm'):
+            for button in (
+                page.edit_buttons[provider],
+                page.connect_buttons[provider],
+                page.test_buttons[provider],
+            ):
+                self.assertFalse(button.icon().isNull())
+                self.assertTrue(button.property('dlmtagsApiAction'))
+                self.assertTrue(button.toolTip())
+        page._test_provider('discogs')
+        self.assertEqual('Testing…', page.status_labels['discogs'].text())
+        self.assertEqual('api.discogs.com', network.request.url().host())
+        reply.finished.emit()
+        self.assertEqual('Connected', page.status_labels['discogs'].text())
+
+        timeout = FakeReply(b'', error=QtNetwork.QNetworkReply.NetworkError.TimeoutError)
+        page.credential_tester._network = FakeNetwork(timeout)
+        page._test_provider('discogs')
+        timeout.finished.emit()
+        self.assertEqual('Failed', page.status_labels['discogs'].text())
+        self.assertIn('timed out', page.status_labels['discogs'].toolTip())
+
+        invalid = FakeReply(b'{"unexpected":true}')
+        page.credential_tester._network = FakeNetwork(invalid)
+        page._test_provider('discogs')
+        invalid.finished.emit()
+        self.assertEqual('Failed', page.status_labels['discogs'].text())
+
+        unavailable = FakeReply(b'{"error":"busy"}', status=503)
+        page.credential_tester._network = FakeNetwork(unavailable)
+        page._test_provider('discogs')
+        unavailable.finished.emit()
+        self.assertEqual('Failed', page.status_labels['discogs'].text())
+        self.assertIn('503', page.status_labels['discogs'].toolTip())
+
+        page.enable_widgets['lastfm'].setChecked(True)
+        page.api_key_widgets['lastfm_api_key'].setText('lastfm-test-key')
+        lastfm = FakeReply(b'{"toptags":{"tag":[]}}')
+        network = FakeNetwork(lastfm)
+        page.credential_tester._network = network
+        page._test_provider('lastfm')
+        self.assertEqual('ws.audioscrobbler.com', network.request.url().host())
+        lastfm.finished.emit()
+        self.assertEqual('Connected', page.status_labels['lastfm'].text())
+
+    def test_dlmsettings_dialog_size_and_footer_controls(self):
+        class DLMtagsWindow(QtWidgets.QWidget):
+            modern_workspace = object()
+
+        parent = DLMtagsWindow()
+        self.addCleanup(parent.deleteLater)
+        config = get_config()
+        config.profiles['user_profiles'] = []
+        config.profiles['user_profile_settings'] = {}
+        self.tagger.get_plugin_manager.return_value = None
+        self.tagger._no_restore = True
+        with (
+            patch('picard.ui.tagger_instance', return_value=self.tagger),
+            patch('picard.ui.options.tagger_instance', return_value=self.tagger),
+            patch('picard.ui.options.dialog.tagger_instance', return_value=self.tagger),
+            patch('picard.util.tagger_instance', return_value=self.tagger),
+        ):
+            dialog = OptionsDialog(default_page='dlmtags_general', parent=parent)
+        self.addCleanup(dialog.deleteLater)
+        self.assertEqual(QtCore.QSize(780, 480), dialog.size())
+        self.assertEqual(QtCore.QSize(620, 360), dialog.minimumSize())
+        self.assertEqual(170, dialog.settings_navigation.minimumWidth())
+        self.assertTrue(dialog.ui.reset_all_button.isHidden())
+        self.assertTrue(dialog.ui.attached_profiles_button.isHidden())
+        self.assertTrue(dialog.ui.buttonbox.button(QtWidgets.QDialogButtonBox.StandardButton.Help).isHidden())
+        for width, height in ((720, 440), (1024, 700)):
+            dialog.resize(width, height)
+            self.assertEqual(QtCore.QSize(width, height), dialog.size())
+
+    def test_settings_navigation_buttons_and_icons(self):
+        navigation = DLMtagsSettingsNavigation()
+        self.addCleanup(navigation.deleteLater)
+        self.assertEqual(
+            ['dlmtags_general', 'dlmtags_api_keys', 'dlmtags_visible_tags', 'dlmtags_file_settings'],
+            list(navigation.buttons),
+        )
+        selected = []
+        navigation.page_selected.connect(selected.append)
+        for name, button in navigation.buttons.items():
+            self.assertTrue(button.text())
+            self.assertFalse(button.icon().isNull())
+            self.assertTrue(button.property('dlmtagsSettingsNav'))
+            button.click()
+            self.assertEqual(name, selected[-1])
+        navigation.set_current_page('dlmtags_visible_tags')
+        self.assertTrue(navigation.buttons['dlmtags_visible_tags'].defaultAction().isChecked())
+        self.assertFalse(navigation.buttons['dlmtags_general'].defaultAction().isChecked())
+
+    def test_dlmsettings_tree_contains_only_curated_pages(self):
+        class PageBuilder:
+            def add_pages(self, parent_name, default_name, parent_item):
+                return OptionsDialog.add_pages(self, parent_name, default_name, parent_item)
+
+        builder = PageBuilder()
+        builder._page_classes = list(ext_point_options_pages)
+        builder.dlmtags_mode = True
+        builder.item_to_page = {}
+        builder.pagename_to_item = {}
+        builder.default_item = None
+        tree = QtWidgets.QTreeWidget()
+        self.addCleanup(tree.deleteLater)
+        builder.add_pages(None, 'dlmtags_general', tree)
+        self.assertEqual(DLMTAGS_SETTINGS_PAGE_NAMES, set(builder.pagename_to_item))
+        builder.ui = SimpleNamespace(pages_tree=tree)
+        navigation = DLMtagsSettingsNavigation()
+        self.addCleanup(navigation.deleteLater)
+        navigation.page_selected.connect(lambda name: OptionsDialog._select_settings_nav_page(builder, name))
+        navigation.buttons['dlmtags_api_keys'].click()
+        self.assertIs(tree.currentItem(), builder.pagename_to_item['dlmtags_api_keys'])
+
+        legacy_builder = PageBuilder()
+        legacy_builder._page_classes = list(ext_point_options_pages)
+        legacy_builder.dlmtags_mode = False
+        legacy_builder.item_to_page = {}
+        legacy_builder.pagename_to_item = {}
+        legacy_builder.default_item = None
+        legacy_tree = QtWidgets.QTreeWidget()
+        self.addCleanup(legacy_tree.deleteLater)
+        legacy_builder.add_pages(None, 'interface', legacy_tree)
+        legacy_pages = set(legacy_builder.pagename_to_item)
+        self.assertTrue({'general', 'interface', 'tags'} <= legacy_pages)
+        self.assertTrue(DLMTAGS_SETTINGS_PAGE_NAMES.isdisjoint(legacy_pages))
+
+    def test_curated_settings_leave_other_picard_configuration_intact(self):
+        self.set_config_values(
+            {
+                'toolbar_show_labels': True,
+                'clear_existing_tags': True,
+                'preserve_timestamps': False,
+            }
+        )
+        with patch('picard.ui.options.tagger_instance', return_value=self.tagger):
+            general = DLMtagsGeneralOptionsPage()
+            file_settings = DLMtagsFileSettingsOptionsPage()
+        self.addCleanup(general.deleteLater)
+        self.addCleanup(file_settings.deleteLater)
+        general.load()
+        general.ui.toolbar_show_labels.setChecked(False)
+        general.save()
+        file_settings.load()
+        file_settings.checks['preserve_timestamps'].setChecked(True)
+        file_settings.save()
+        config = get_config()
+        self.assertTrue(config.setting['toolbar_show_labels'])
+        self.assertTrue(config.setting['clear_existing_tags'])
+        self.assertTrue(config.setting['preserve_timestamps'])
+
+
 class MatchingResultsTest(InlineTestCase):
     def results(self):
         window = MagicMock()
         window.action_map = {
-            MainAction.ANALYZE: QtGui.QAction('Scan'), MainAction.AUTOTAG: QtGui.QAction('Lookup'),
+            MainAction.ANALYZE: QtGui.QAction('Scan'),
+            MainAction.AUTOTAG: QtGui.QAction('Lookup'),
         }
         window.tagger.webservice.num_pending_web_requests = 0
         results = MatchingResults(window)
@@ -403,8 +747,10 @@ class MatchingResultsTest(InlineTestCase):
     @staticmethod
     def rows(dialog):
         model = dialog.table.model()
-        return [[model.index(row, column).data() for column in range(model.columnCount())]
-                for row in range(model.rowCount())]
+        return [
+            [model.index(row, column).data() for column in range(model.columnCount())]
+            for row in range(model.rowCount())
+        ]
 
     def test_confirm_results_dialog_confirms_or_cancels(self):
         results = self.results()
@@ -416,7 +762,17 @@ class MatchingResultsTest(InlineTestCase):
         dialog = ConfirmResultsDialog(self.file)
         self.addCleanup(dialog.deleteLater)
         self.assertEqual(
-            [['P!nk + Willow Sage Hart', 'Cover Me in Sunshine', PINK_RECORDING, 'Length mismatch']], self.rows(dialog),
+            [
+                [
+                    'P!nk + Willow Sage Hart',
+                    'Cover Me in Sunshine',
+                    '141.0 s',
+                    '98.6%',
+                    'Cover Me in Sunshine (2021-02-12)',
+                    'Length mismatch',
+                ]
+            ],
+            self.rows(dialog),
         )
         self.assertIn('Length mismatch', dialog.reason_label.text())
         self.assertTrue(dialog.confirm_button.isEnabled())  # the single plausible recording
@@ -488,12 +844,14 @@ class ArtworkSearchTest(ArtworkTestCase):
         search.start()
         self.assertEqual('rec', self.tagger.mb_api.get_track_by_id.call_args.args[0])
         self.assertEqual(('releases', 'release-groups'), self.tagger.mb_api.get_track_by_id.call_args.kwargs['inc'])
-        self.releases_reply([
-            release(mbid('a'), 'Album', '2001', status='Official'),
-            release(mbid('b'), 'Album', '2002', status='Official'),
-            release(mbid('c'), 'Other', '2003', status='Official'),
-            release(mbid('a'), 'Album', '2001', status='Official'),
-        ])
+        self.releases_reply(
+            [
+                release(mbid('a'), 'Album', '2001', status='Official'),
+                release(mbid('b'), 'Album', '2002', status='Official'),
+                release(mbid('c'), 'Other', '2003', status='Official'),
+                release(mbid('a'), 'Album', '2001', status='Official'),
+            ]
+        )
         self.assertEqual(3, len(self.thumbnails()))
         red = png('red')
         self.answer(mbid('a'), red)
@@ -590,6 +948,33 @@ class ArtworkSuggestionsTest(ArtworkTestCase):
         self.assertEqual(1, len(self.file.metadata.images))
         self.assertEqual([], list(self.file.orig_metadata.images))
         self.assertIn(status_text(Status.CHOSEN), panel.suggested_label.text())
+
+    def test_manual_confirm_stages_artwork_but_cancel_does_not_save(self):
+        panel = ArtworkSuggestions(self.tagger)
+        self.addCleanup(panel.deleteLater)
+        panel.set_file(self.file)
+        cover = CaaCoverArtImage(
+            url='https://coverartarchive.org/release/example/front', types=['front'], is_front=True, data=png('red')
+        )
+        existing = CaaCoverArtImage(
+            url='https://coverartarchive.org/release/existing/front', types=['front'], is_front=True, data=png('blue')
+        )
+        self.file.metadata.images.append(existing)
+        self.file.orig_metadata.images.append(existing)
+        dialog = MagicMock()
+        dialog.cover = cover
+        with (
+            patch('picard.ui.dlmtags.artwork.ManualArtworkDialog', return_value=dialog),
+            patch.object(File, 'save') as save,
+        ):
+            dialog.exec.return_value = QtWidgets.QDialog.DialogCode.Rejected
+            panel.open_manual_search()
+            self.assertEqual([existing], list(self.file.metadata.images))
+            dialog.exec.return_value = QtWidgets.QDialog.DialogCode.Accepted
+            panel.open_manual_search()
+        save.assert_not_called()
+        self.assertEqual([existing, cover], list(self.file.metadata.images))
+        self.assertEqual([existing], list(self.file.orig_metadata.images))
 
     def test_choosing_again_replaces_the_previous_pick(self):
         panel = self.panel(
