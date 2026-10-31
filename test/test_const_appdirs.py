@@ -40,36 +40,39 @@ class AppPathsTest(PicardTestCase):
 
     @unittest.skipUnless(IS_WIN, "Windows test")
     def test_config_folder_win(self):
-        self.assert_home_path_equals('~/AppData/Local/MusicBrainz/Picard', config_folder())
+        self.assert_home_path_equals('~/AppData/Local/DLMtags/DLMtags', config_folder())
 
     @unittest.skipUnless(IS_MACOS, "macOS test")
     def test_config_folder_macos(self):
-        self.assert_home_path_equals('~/Library/Preferences/MusicBrainz/Picard', config_folder())
+        self.assert_home_path_equals('~/Library/Preferences/DLMtags/DLMtags', config_folder())
 
     @unittest.skipUnless(IS_LINUX, "Linux test")
     def test_config_folder_linux(self):
-        self.assert_home_path_equals('~/.config/MusicBrainz/Picard', config_folder())
+        base = os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config'))
+        self.assertEqual(os.path.join(base, 'DLMtags', 'DLMtags'), config_folder())
 
     @unittest.skipUnless(IS_WIN, "Windows test")
     def test_cache_folder_win(self):
-        self.assert_home_path_equals('~/AppData/Local/MusicBrainz/Picard/cache', cache_folder())
+        self.assert_home_path_equals('~/AppData/Local/DLMtags/DLMtags/cache', cache_folder())
 
     @unittest.skipUnless(IS_MACOS, "macOS test")
     def test_cache_folder_macos(self):
-        self.assert_home_path_equals('~/Library/Caches/MusicBrainz/Picard', cache_folder())
+        self.assert_home_path_equals('~/Library/Caches/DLMtags/DLMtags', cache_folder())
 
     @unittest.skipUnless(IS_LINUX, "Linux test")
     def test_cache_folder_linux(self):
-        self.assert_home_path_equals('~/.cache/MusicBrainz/Picard', cache_folder())
+        base = os.environ.get('XDG_CACHE_HOME', os.path.expanduser('~/.cache'))
+        self.assertEqual(os.path.join(base, 'DLMtags', 'DLMtags'), cache_folder())
 
     @unittest.skipUnless(IS_WIN, "Windows test")
     def test_plugin_folder_win(self):
-        self.assert_home_path_equals('~/AppData/Roaming/MusicBrainz/Picard/plugins3', plugin_folder())
+        self.assert_home_path_equals('~/AppData/Roaming/DLMtags/DLMtags/plugins3', plugin_folder())
 
     @unittest.skipUnless(IS_MACOS, "macOS test")
     def test_plugin_folder_macos(self):
-        self.assert_home_path_equals('~/Library/Application Support/MusicBrainz/Picard/plugins3', plugin_folder())
+        self.assert_home_path_equals('~/Library/Application Support/DLMtags/DLMtags/plugins3', plugin_folder())
 
     @unittest.skipUnless(IS_LINUX, "Linux test")
     def test_plugin_folder_linux(self):
-        self.assert_home_path_equals('~/.local/share/MusicBrainz/Picard/plugins3', plugin_folder())
+        base = os.environ.get('XDG_DATA_HOME', os.path.expanduser('~/.local/share'))
+        self.assertEqual(os.path.join(base, 'DLMtags', 'DLMtags', 'plugins3'), plugin_folder())

@@ -32,6 +32,8 @@ from typing import Any
 
 from picard import (
     PICARD_APP_ID,
+    PICARD_APP_NAME,
+    PICARD_ORG_NAME,
     log,
 )
 from picard.const.sys import (
@@ -295,7 +297,7 @@ class AbstractPipe(metaclass=ABCMeta):
 class UnixPipe(AbstractPipe):
     PIPE_DIRS: tuple[str] = (
         os.getenv('XDG_RUNTIME_DIR'),
-        "~/.config/MusicBrainz/Picard/pipes/",
+        os.path.join(os.getenv('XDG_CONFIG_HOME', '~/.config'), PICARD_ORG_NAME, 'pipes'),
     )  # type: ignore
 
     def __init__(
@@ -371,7 +373,7 @@ class MacOSPipe(UnixPipe):
 
 
 class HaikuPipe(UnixPipe):
-    PIPE_DIRS: tuple[str] = ("~/config/var/MusicBrainz/Picard/",)
+    PIPE_DIRS: tuple[str] = (os.path.join('~/config/var', PICARD_APP_NAME, 'pipes'),)
 
 
 class WinPipe(AbstractPipe):

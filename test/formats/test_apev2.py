@@ -23,6 +23,7 @@
 import os
 from types import MappingProxyType
 
+from mutagen import MutagenError
 from mutagen.apev2 import (
     BINARY,
     APEValue,
@@ -218,24 +219,24 @@ class WavPackTest(CommonApeTests.ApeTestCase):
         return (target_file_wv, target_file_wvc)
 
     def test_save_deleted_file_before_save(self):
-        """Saving raises FileNotFoundError if file is deleted after load."""
+        """Saving fails if the file is deleted after load."""
         f = self.format_registry.open(self.filename)
         f._copy_loaded_metadata(f._load(self.filename))
         f.metadata['title'] = 'deleted_before_save'
+        config.setting['enable_tag_saving'] = True
         # Delete file externally
         os.unlink(self.filename)
         self.assertFalse(os.path.exists(self.filename))
-        # Current behavior: saving raises FileNotFoundError
-        with self.assertRaises(FileNotFoundError):
+        with self.assertRaises(MutagenError):
             f._save_and_rename(self.filename, f.metadata)
 
     @skipUnlessTestfile
     def test_save_wavpack_correction_file(self):
         source_file_wvc = self.filename + 'c'
         (target_file_wv, target_file_wvc) = self._save_with_wavpack_correction_file(source_file_wvc)
-        # Check both the WavPack file and the correction file got moved
-        self.assertFalse(os.path.isfile(self.filename))
-        self.assertFalse(os.path.isfile(source_file_wvc))
+        # DLMtags leaves the audio file and correction file in place.
+        self.assertTrue(os.path.isfile(self.filename))
+        self.assertTrue(os.path.isfile(source_file_wvc))
         self.assertTrue(os.path.isfile(target_file_wv))
         self.assertTrue(os.path.isfile(target_file_wvc))
 
@@ -247,9 +248,9 @@ class WavPackTest(CommonApeTests.ApeTestCase):
         config.setting['move_additional_files_pattern'] = '*.wvc'
         source_file_wvc = self.filename + 'c'
         (target_file_wv, target_file_wvc) = self._save_with_wavpack_correction_file(source_file_wvc)
-        # Check both the WavPack file and the correction file got moved
-        self.assertFalse(os.path.isfile(self.filename))
-        self.assertFalse(os.path.isfile(source_file_wvc))
+        # Hidden move settings cannot move either file.
+        self.assertTrue(os.path.isfile(self.filename))
+        self.assertTrue(os.path.isfile(source_file_wvc))
         self.assertTrue(os.path.isfile(target_file_wv))
         self.assertTrue(os.path.isfile(target_file_wvc))
 

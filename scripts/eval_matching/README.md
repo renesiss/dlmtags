@@ -1,5 +1,41 @@
 # Matching Evaluation Tools
 
+## P1 labeled accuracy benchmark
+
+`benchmark_accuracy.py` scores three **separately collected, labeled** exports:
+MusicBrainz Picard Scan, DLMtags Smart Scan, and DLMtags Bulk Auto-Tag. The
+existing matching corpus below is synthetic and is not an accuracy dataset.
+No representative labeled audio set is bundled.
+
+Prepare one manifest with `cases`, each containing a unique `id`, the SHA-256
+of an immutable audio input, `challenges` and ground-truth `artist`, `title`,
+`date`, and `genre` in `truth`. Include live, remix, cover, compilation,
+missing/incorrect tags, malformed filename and non-Latin cases. Verify labels
+independently before running any system. Use disposable copies of each input;
+never save to the originals.
+
+Export one JSON file per system with `version`, `configuration`, and `results`.
+Every result needs `id`, the same input `sha256`, `decision` (`matched`,
+`needs_review`, `no_match`, or `error`), proposed `tags`, `runtime_ms`, and
+`provider_requests` (provider name to request count). Capture request counts
+from the actual client/network logs, including retries. Record AcoustID,
+MusicBrainz, provider and cache settings in `configuration`; use equivalent
+settings and identical network/cache conditions for all runs. Do not count
+unconfirmed suggestions as applied tags.
+
+Run the offline scorer with:
+
+```bash
+python scripts/eval_matching/benchmark_accuracy.py manifest.json picard.json smart_scan.json bulk.json
+```
+
+It rejects missing challenge categories, mismatched case IDs and changed audio
+hashes. Precision/recall are exact field matches; coverage is the matched case
+rate; false-positive rate uses fields whose ground truth is empty; Needs Review
+rate uses review decisions. It also reports incorrect Artist/Title/Year counts,
+runtime and provider requests. Until the labeled exports exist, accuracy is
+**NOT VERIFIED**.
+
 Two evaluation harnesses for Picard's matching algorithms:
 
 - **`eval_matching.py`** — Release matching (cluster → release, file → track within a release)

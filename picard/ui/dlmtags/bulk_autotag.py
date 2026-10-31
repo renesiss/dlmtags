@@ -21,9 +21,11 @@ from picard.bulk_autotag import (
     classify,
     propose,
 )
+from picard.config import get_config
 from picard.file import File
 from picard.i18n import gettext as _
 from picard.metadata import Metadata
+from picard.smartgenre import SmartGenreRequest
 from picard.util import (
     iter_files_from_objects,
     resolve_fs_path,
@@ -487,10 +489,50 @@ class BulkAutoTagDialog(QtWidgets.QDialog):
         if self.cancelled or file is not self.active:
             return
         status, reason = classify(decision)
+        settings = get_config().setting
+        if (
+            status == 'matched'
+            and not any(value.strip() for value in original.getall('genre'))
+            and 'genre' not in original.deleted_tags
+            and settings['use_genres']
+            and settings['max_genres'] > 0
+            and isinstance(file, QtCore.QObject)
+        ):
+            # The same bounded provider chain used by single Smart Scan.
+            # Keep this file active until its async result (including timeout).
+            request = SmartGenreRequest(
+                file,
+                decision,
+                on_result=lambda values, source, result_status: self._genre_finished(
+                    file, decision, original, status, reason, values, result_status
+                ),
+            )
+            file._smart_genre_request = request
+            request.start()
+            return
+        self._complete_result(file, decision, original, status, reason)
+
+    def _genre_finished(self, file, decision, original, status, reason, values, result_status):
+        if self.cancelled or file is not self.active:
+            return
+        self._complete_result(
+            file,
+            decision,
+            original,
+            status,
+            reason,
+            genre_values=values if result_status == 'ready' else (),
+        )
+
+    def _complete_result(self, file, decision, original, status, reason, *, genre_values=()):
         proposal = None
         if status == 'matched':
             try:
-                proposal = propose(original, decision)
+                proposal = (
+                    propose(original, decision, genre_values=genre_values)
+                    if genre_values
+                    else propose(original, decision)
+                )
             except (KeyError, TypeError, ValueError):
                 log.error('Bulk Auto-Tag: cannot prepare preview for %s', file.filename, exc_info=True)
                 status, reason = 'failed', _('Could not prepare metadata preview')
@@ -631,6 +673,8 @@ class BulkAutoTagDialog(QtWidgets.QDialog):
         if self.active is not None:
             active = self.active
             active.cancel_smart_scan()
+            if isinstance(active, QtCore.QObject):
+                active.cancel_smart_genre()
             self._add(active, 'skipped', _('Scan stopped'), None, Metadata(active.metadata), None)
             self.active = None
         for file in self.files:

@@ -10,6 +10,8 @@ include *.txt
 
 recursive-include resources *.py
 recursive-include resources/images *
+recursive-include picard/ui/dlmtags/icons *.svg
+include dlmtags.desktop
 
 recursive-include test *.py
 recursive-include test/data *

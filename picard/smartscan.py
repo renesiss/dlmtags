@@ -685,7 +685,12 @@ def candidate_filename_hints(hints: FileHints, track: dict) -> FileHints:
     for index, credit in enumerate(credits):
         if index:
             while offset < len(tokens) and tokens[offset].group().casefold() in {
-                'and', 'feat', 'ft', 'featuring', 'with', 'x',
+                'and',
+                'feat',
+                'ft',
+                'featuring',
+                'with',
+                'x',
             }:
                 offset += 1
         names = candidate_artist_names({'artist-credit': [credit]})[1]
@@ -705,8 +710,13 @@ def candidate_filename_hints(hints: FileHints, track: dict) -> FileHints:
         return hints
     full, _names = candidate_artist_names(track)
     return replace(
-        hints, artist=full, artist_names=tuple(split_artist_names(full)), artist_source='filename',
-        title=text[tokens[offset].start():].strip(), title_source='filename', filename_text='',
+        hints,
+        artist=full,
+        artist_names=tuple(split_artist_names(full)),
+        artist_source='filename',
+        title=text[tokens[offset].start() :].strip(),
+        title_source='filename',
+        filename_text='',
     )
 
 
@@ -863,9 +873,7 @@ def recording_match(metadata: Metadata, track: dict, weights) -> SimMatchTrack:
     """Reuse Picard's recording signals without any release-level evidence."""
     identity_weights = {
         'identifiers': {k: v for k, v in weights.get('identifiers', {}).items() if k == 'isrc'},
-        'similarity': {
-            k: v for k, v in weights.get('similarity', {}).items() if k in {'artist', 'title', 'length'}
-        },
+        'similarity': {k: v for k, v in weights.get('similarity', {}).items() if k in {'artist', 'title', 'length'}},
     }
     node = dict(track, title=strip_source_labels(track.get('title', '')), releases=[])
     match = compare_to_track(metadata, node, identity_weights)
@@ -1013,6 +1021,35 @@ def first_release_date(track: dict) -> str:
     return max(dates, key=_date_sort_value) if dates else ''
 
 
+@dataclass(frozen=True)
+class YearDecision:
+    """Recording-first Year choice, separate from a selected album's date."""
+
+    automatic: str = ''
+    suggestion: str = ''
+
+
+def decide_year(track: dict, current: Sequence[str], *, deleted: bool = False) -> YearDecision:
+    """Fill an empty Year; offer conflicting evidence for explicit review.
+
+    A stored value, including an invalid one, is never automatically replaced.
+    Only MusicBrainz recording first-release evidence (or its earliest known
+    non-compilation release) is eligible; the chosen album date is ignored.
+    """
+    if deleted:
+        return YearDecision()
+    first = first_release_date(track)
+    if not first:
+        return YearDecision()
+    existing = next((value for value in current if value.strip()), '')
+    if not existing:
+        return YearDecision(automatic=first)
+    existing_year = release_year(existing)
+    if existing_year and existing_year != first[:4]:
+        return YearDecision(suggestion=first)
+    return YearDecision()
+
+
 def _date_sort_value(date: object) -> int:
     """Earlier dates rank higher; missing dates rank lowest."""
     date = normalize_release_date(date)
@@ -1147,9 +1184,10 @@ def select_release(match: SimMatchTrack, hints: FileHints, scoring_metadata: Met
     # recording. Keep the release only as a review suggestion.
     conflict = bool(hints.album and not identified)
     equivalent = [r for rank, r in keyed if rank[:-1] == best_key[:-1]]
-    unique_release = bool(
-        best.get('id') and (best.get('release-group') or {}).get('id')
-    ) and len({r.get('id') for r in equivalent}) == 1
+    unique_release = (
+        bool(best.get('id') and (best.get('release-group') or {}).get('id'))
+        and len({r.get('id') for r in equivalent}) == 1
+    )
     types = set(_release_types(best))
     official_single = (
         (best.get('status') or '').lower() == 'official'
@@ -1159,13 +1197,13 @@ def select_release(match: SimMatchTrack, hints: FileHints, scoring_metadata: Met
         and bool(normalize_release_date(best.get('date')))
     )
     official_releases = [
-        r for r in releases
+        r
+        for r in releases
         if (r.get('status') or '').lower() == 'official'
         and not set(_release_types(r)) & (_UNWANTED_SECONDARY_TYPES | discouraged)
     ]
     official_dates = [
-        normalize_release_date(r.get('date')) for r in official_releases
-        if normalize_release_date(r.get('date'))
+        normalize_release_date(r.get('date')) for r in official_releases if normalize_release_date(r.get('date'))
     ]
     earliest = bool(official_dates) and _date_sort_value(best.get('date')) == max(
         _date_sort_value(d) for d in official_dates
@@ -1189,10 +1227,8 @@ def select_release(match: SimMatchTrack, hints: FileHints, scoring_metadata: Met
         elif other_date.startswith(best_date) or best_date.startswith(other_date):
             chronology_clear = False
     verified = unique_release and (
-        identified or (
-            not (hints.album or hints.album_ids or hints.barcode)
-            and official_single and earliest and chronology_clear
-        )
+        identified
+        or (not (hints.album or hints.album_ids or hints.barcode) and official_single and earliest and chronology_clear)
     )
     notes: list[Reason] = []
     if not verified:
@@ -1206,7 +1242,11 @@ def select_release(match: SimMatchTrack, hints: FileHints, scoring_metadata: Met
     file_year = extract_year_from_date(hints.date) if hints.date else None
     if file_year is not None:
         release_year = extract_year_from_date(normalize_release_date(best.get('date')))
-        years = [y for y in (extract_year_from_date(normalize_release_date(r.get('date'))) for r in releases) if y is not None]
+        years = [
+            y
+            for y in (extract_year_from_date(normalize_release_date(r.get('date'))) for r in releases)
+            if y is not None
+        ]
         original_year = min(years) if years else None
         # A differing date is only noted, never treated as an error: the file
         # may carry the original release year, the release year or neither.
@@ -1547,10 +1587,16 @@ def confirmable_recordings(decision: Decision | None, credits: Mapping[str, dict
             metadata = Metadata()
             recording_to_metadata(node, metadata)
             artist = metadata['artist']
-        result.append(ConfirmableRecording(
-            candidate.recording_id, artist, (node or candidate.node).get('title', '') or candidate.title,
-            tuple(candidate.reasons), candidate.recording_id in plausible, candidate.similarity,
-        ))
+        result.append(
+            ConfirmableRecording(
+                candidate.recording_id,
+                artist,
+                (node or candidate.node).get('title', '') or candidate.title,
+                tuple(candidate.reasons),
+                candidate.recording_id in plausible,
+                candidate.similarity,
+            )
+        )
     return sorted(result, key=lambda r: not r.plausible)
 
 
@@ -1561,8 +1607,13 @@ def preselected_recording(recordings) -> str | None:
 
 
 def confirmed_decision(
-    review: Decision, recording_id: str, metadata: Metadata, base_filename: str, weights,
-    credits: Mapping[str, dict] | None = None, config=None,
+    review: Decision,
+    recording_id: str,
+    metadata: Metadata,
+    base_filename: str,
+    weights,
+    credits: Mapping[str, dict] | None = None,
+    config=None,
 ) -> Decision | None:
     """The user-confirmed recording of a Needs Review decision, or None.
 
@@ -1665,11 +1716,31 @@ def combine(acoustid: Decision | None, metadata: Decision, thresholds: SmartScan
 # Never copy an uncertain release's fields into a recording-only match.
 RELEASE_SPECIFIC_TAGS = frozenset(
     {
-        'album', 'albumartist', 'albumartists', 'albumartistsort', 'date', 'originaldate', 'originalyear',
-        'tracknumber', 'totaltracks', 'totalalbumtracks', 'discnumber', 'totaldiscs', 'discsubtitle',
-        'musicbrainz_albumid', 'musicbrainz_releasegroupid', 'musicbrainz_albumartistid',
-        'musicbrainz_trackid', 'releasecountry', 'releasetype', 'releasestatus', 'media',
-        'label', 'catalognumber', 'barcode', 'compilation',
+        'album',
+        'albumartist',
+        'albumartists',
+        'albumartistsort',
+        'date',
+        'originaldate',
+        'originalyear',
+        'tracknumber',
+        'totaltracks',
+        'totalalbumtracks',
+        'discnumber',
+        'totaldiscs',
+        'discsubtitle',
+        'musicbrainz_albumid',
+        'musicbrainz_releasegroupid',
+        'musicbrainz_albumartistid',
+        'musicbrainz_trackid',
+        'releasecountry',
+        'releasetype',
+        'releasestatus',
+        'media',
+        'label',
+        'catalognumber',
+        'barcode',
+        'compilation',
     }
 )
 

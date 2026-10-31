@@ -19,6 +19,7 @@ All candidates are synthetic; no AcoustID or MusicBrainz access is needed.
 """
 
 from types import SimpleNamespace
+from typing import ClassVar
 import unittest
 from unittest.mock import (
     MagicMock,
@@ -61,8 +62,8 @@ from picard.smartscan import (
     split_artist_names,
     split_title,
 )
-from picard.track import Track
 from picard.tagprovenance import source_for
+from picard.track import Track
 from picard.util import tracknum_and_title_from_filename
 from picard.util.imagelist import ImageList
 
@@ -221,14 +222,17 @@ class TextEvidenceTest(SmartScanPolicyTestCase):
         self.assertEqual(('lil baby',), parts.featured)
         self.assertEqual(frozenset(), parts.versions)
 
-    @subtest_cases('title,base', [
-        ('Stay With Me', 'Stay With Me'),
-        ('With or Without You', 'With or Without You'),
-        ('Dancing with Myself', 'Dancing with Myself'),
-        ('Die With a Smile', 'Die With a Smile'),
-        ('Stay With Me (Live)', 'Stay With Me'),
-        ('Die With a Smile (feat. Someone)', 'Die With a Smile'),
-    ])
+    @subtest_cases(
+        'title,base',
+        [
+            ('Stay With Me', 'Stay With Me'),
+            ('With or Without You', 'With or Without You'),
+            ('Dancing with Myself', 'Dancing with Myself'),
+            ('Die With a Smile', 'Die With a Smile'),
+            ('Stay With Me (Live)', 'Stay With Me'),
+            ('Die With a Smile (feat. Someone)', 'Die With a Smile'),
+        ],
+    )
     def test_split_title_keeps_with_in_title_proper(self, title, base):
         # "with" is an ordinary word in a title; only a qualifier credits a guest.
         self.assertEqual(base, split_title(title).base)
@@ -623,11 +627,15 @@ class ReleaseSelectionTest(SmartScanPolicyTestCase):
 class CombineTest(SmartScanPolicyTestCase):
     def test_failed_lookup_does_not_turn_weak_fingerprint_into_conflict(self):
         weak = self.decide(
-            Source.ACOUSTID, [acoustid_recording('rec', 'Song', 'Artist', 200000, 0.4)],
+            Source.ACOUSTID,
+            [acoustid_recording('rec', 'Song', 'Artist', 200000, 0.4)],
             file_metadata(200000, title='Song', artist='Artist'),
         )
         failed = self.decide(
-            Source.METADATA, [], file_metadata(), error=QNetworkReply.NetworkError.ServiceUnavailableError,
+            Source.METADATA,
+            [],
+            file_metadata(),
+            error=QNetworkReply.NetworkError.ServiceUnavailableError,
         )
         final = combine(weak, failed, self.thresholds)
         self.assertEqual(Outcome.ERROR, final.outcome)
@@ -809,9 +817,13 @@ class SmartScanFileTest(PicardTestCase):
         self.start()({'recordings': []}, None, None)
         http = MagicMock()
         http.attribute.return_value = 503
-        self.lookup_callback()({
-            'recordings': [recording('wrong', 'Wrong Song', 'Wrong Artist', 232000)],
-        }, http, None)
+        self.lookup_callback()(
+            {
+                'recordings': [recording('wrong', 'Wrong Song', 'Wrong Artist', 232000)],
+            },
+            http,
+            None,
+        )
         decision = self.file.smart_scan_decision
         self.assertEqual(Outcome.ERROR, decision.outcome)
         self.assertEqual((Reason.NETWORK_ERROR,), decision.reasons)
@@ -827,7 +839,9 @@ class SmartScanFileTest(PicardTestCase):
         self.assertEqual(Outcome.CANCELLED, self.file.smart_scan_decision.outcome)
 
     def test_flattened_video_filename_uses_clean_background_search(self):
-        self.file = File('/music/002 - Rag_n_Bone_Man_P_nk_Anywhere_Away_From_Here_Official_Video - P_NK [IiuE9TzMfxs].mp4')
+        self.file = File(
+            '/music/002 - Rag_n_Bone_Man_P_nk_Anywhere_Away_From_Here_Official_Video - P_NK [IiuE9TzMfxs].mp4'
+        )
         self.file.state = File.State.NORMAL
         self.file.metadata = file_metadata()
         self.start()({'recordings': []}, None, None)
@@ -837,7 +851,9 @@ class SmartScanFileTest(PicardTestCase):
         self.assertEqual('Rag n Bone Man P nk Anywhere Away From Here', kwargs['query'])
 
     def test_confirmed_video_caption_updates_new_tags_immediately(self):
-        self.file = File('/music/002 - Rag_n_Bone_Man_P_nk_Anywhere_Away_From_Here_Official_Video - P_NK [IiuE9TzMfxs].mp4')
+        self.file = File(
+            '/music/002 - Rag_n_Bone_Man_P_nk_Anywhere_Away_From_Here_Official_Video - P_NK [IiuE9TzMfxs].mp4'
+        )
         self.file.state = File.State.NORMAL
         self.file.orig_metadata = file_metadata()
         self.file.metadata = Metadata(self.file.orig_metadata)
@@ -889,7 +905,8 @@ class SmartScanFileTest(PicardTestCase):
         self.tagger.mb_api.find_tracks.assert_called_once()
         self.lookup_callback()(
             {'recordings': [recording('bsb', 'Larger Than Life', 'Backstreet Boys', 232 * SECOND, BSB_RELEASES)]},
-            None, None,
+            None,
+            None,
         )
         self.tagger.move_file_to_track.assert_not_called()
         self.tagger.move_file_to_nat.assert_not_called()
@@ -1139,7 +1156,8 @@ class SmartScanDateTest(PicardTestCase):
         target = MagicMock(spec=File)
         target.dlmtags_tag_sources = {}
         target.smart_scan_decision = smartscan.Decision(
-            Outcome.MATCHED, candidates=(candidate,),
+            Outcome.MATCHED,
+            candidates=(candidate,),
             match=SimpleNamespace(track={'id': 'rec', 'title': 'Song', 'artist-credit': credit('Artist')}),
         )
         results = MagicMock()
@@ -1208,23 +1226,52 @@ PINK_CREDIT = [
 
 def pink_acoustid_document():
     recording = {
-        'id': PINK_RECORDING, 'title': 'Cover Me in Sunshine', 'duration': 141.05, 'sources': 4,
+        'id': PINK_RECORDING,
+        'title': 'Cover Me in Sunshine',
+        'duration': 141.05,
+        'sources': 4,
         'artists': PINK_CREDIT,
-        'releasegroups': [{
-            'id': 'dc79d0fe-91b2-4999-bd1c-f7fd7755ca3f', 'type': 'Single', 'title': 'Cover Me in Sunshine',
-            'artists': PINK_CREDIT,
-            'releases': [{
-                'id': '936a0a82-11b1-4d3b-8202-dde08daccd10', 'country': 'XW',
-                'date': {'year': 2021, 'month': 2, 'day': 12}, 'medium_count': 1, 'track_count': 1,
-                'mediums': [{'format': 'Digital Media', 'position': 1, 'track_count': 1, 'tracks': [{
-                    'id': '9e4098f2-2989-41b8-b54f-32b023f7ef25', 'position': 1,
-                }]}],
-            }],
-        }],
+        'releasegroups': [
+            {
+                'id': 'dc79d0fe-91b2-4999-bd1c-f7fd7755ca3f',
+                'type': 'Single',
+                'title': 'Cover Me in Sunshine',
+                'artists': PINK_CREDIT,
+                'releases': [
+                    {
+                        'id': '936a0a82-11b1-4d3b-8202-dde08daccd10',
+                        'country': 'XW',
+                        'date': {'year': 2021, 'month': 2, 'day': 12},
+                        'medium_count': 1,
+                        'track_count': 1,
+                        'mediums': [
+                            {
+                                'format': 'Digital Media',
+                                'position': 1,
+                                'track_count': 1,
+                                'tracks': [
+                                    {
+                                        'id': '9e4098f2-2989-41b8-b54f-32b023f7ef25',
+                                        'position': 1,
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
     }
-    return {'status': 'ok', 'results': [{
-        'id': '754c58ce-b827-4ae3-ae72-68bda67f31c9', 'score': 0.9861551, 'recordings': [recording],
-    }]}
+    return {
+        'status': 'ok',
+        'results': [
+            {
+                'id': '754c58ce-b827-4ae3-ae72-68bda67f31c9',
+                'score': 0.9861551,
+                'recordings': [recording],
+            }
+        ],
+    }
 
 
 def pink_acoustid_recordings():
@@ -1245,14 +1292,32 @@ def pink_musicbrainz_recordings():
     credit_nodes = credit('P!nk', 'Willow Sage Hart', joinphrase=' + ')
     live = credit('P!nk', 'Willow Sage Hart', joinphrase=' & ')
     return [
-        recording(PINK_RECORDING, 'Cover Me in Sunshine', ('P!nk', 'Willow Sage Hart'), 141050,
-                  [release('single', 'Cover Me in Sunshine', '2021-02-12', primary='Single', status='Official',
-                           tracks=1)], score=100) | {'artist-credit': credit_nodes},
-        recording('4fd147cd-1ae1-4f51-b706-3e9da89f1555', 'Cover Me in Sunshine (live)',
-                  ('P!nk', 'Willow Sage Hart'), 171233, score=92) | {'artist-credit': live},
-        recording('cba0da8a-174d-4b41-82bb-2bbdb8b1158c', 'Cover Me in Sunshine (live)',
-                  ('P!nk', 'Willow Sage Hart'), 171000, score=92,
-                  disambiguation='360 Reality Audio mix') | {'artist-credit': live},
+        recording(
+            PINK_RECORDING,
+            'Cover Me in Sunshine',
+            ('P!nk', 'Willow Sage Hart'),
+            141050,
+            [release('single', 'Cover Me in Sunshine', '2021-02-12', primary='Single', status='Official', tracks=1)],
+            score=100,
+        )
+        | {'artist-credit': credit_nodes},
+        recording(
+            '4fd147cd-1ae1-4f51-b706-3e9da89f1555',
+            'Cover Me in Sunshine (live)',
+            ('P!nk', 'Willow Sage Hart'),
+            171233,
+            score=92,
+        )
+        | {'artist-credit': live},
+        recording(
+            'cba0da8a-174d-4b41-82bb-2bbdb8b1158c',
+            'Cover Me in Sunshine (live)',
+            ('P!nk', 'Willow Sage Hart'),
+            171000,
+            score=92,
+            disambiguation='360 Reality Audio mix',
+        )
+        | {'artist-credit': live},
     ]
 
 
@@ -1286,7 +1351,10 @@ class OfficialVideoLengthTest(SmartScanPolicyTestCase):
         # fingerprint the duration difference must keep it out of Matched.
         acoustid = self.decide(Source.ACOUSTID, [], file_metadata(PINK_LENGTH), PINK_FILENAME)
         metadata = self.decide(
-            Source.METADATA, pink_musicbrainz_recordings(), file_metadata(PINK_LENGTH), PINK_FILENAME,
+            Source.METADATA,
+            pink_musicbrainz_recordings(),
+            file_metadata(PINK_LENGTH),
+            PINK_FILENAME,
         )
         final = combine(acoustid, metadata, self.thresholds)
         self.assertEqual(Outcome.NEEDS_REVIEW, final.outcome)
@@ -1311,29 +1379,73 @@ def gaga_acoustid_document():
 
     def node(rid, duration, sources, group, release, date, tracks, position):
         return {
-            'id': rid, 'title': 'Bad Romance', 'duration': duration, 'sources': sources, 'artists': credit,
-            'releasegroups': [{
-                'id': group[0], 'type': group[1], 'title': group[2], 'artists': credit,
-                'releases': [{
-                    'id': release, 'country': 'XW', 'date': date, 'medium_count': 1, 'track_count': tracks,
-                    'mediums': [{'format': 'Digital Media', 'position': 1, 'track_count': tracks,
-                                 'tracks': [{'id': release[:8] + '-track', 'position': position}]}],
-                }],
-            }],
+            'id': rid,
+            'title': 'Bad Romance',
+            'duration': duration,
+            'sources': sources,
+            'artists': credit,
+            'releasegroups': [
+                {
+                    'id': group[0],
+                    'type': group[1],
+                    'title': group[2],
+                    'artists': credit,
+                    'releases': [
+                        {
+                            'id': release,
+                            'country': 'XW',
+                            'date': date,
+                            'medium_count': 1,
+                            'track_count': tracks,
+                            'mediums': [
+                                {
+                                    'format': 'Digital Media',
+                                    'position': 1,
+                                    'track_count': tracks,
+                                    'tracks': [{'id': release[:8] + '-track', 'position': position}],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
         }
 
     single = ('4535cbfb-a9a8-49ac-ac19-8f64d7af3bc7', 'Single', 'Bad Romance')
     ep = ('20b4c8b3-e922-44a3-90e8-fa00acad8ed4', 'EP', 'The Fame Monster')
-    video = node(GAGA_RECORDING, 315.0, 61, single, '04f101f9-ec94-44e5-ada0-ad008e4ba143',
-                 {'year': 2009, 'month': 11, 'day': 19}, 5, 5)
-    return {'status': 'ok', 'results': [
-        {'id': '3a3c45ec-c01d-4c92-b96f-554b0eb0f700', 'score': 0.9718486, 'recordings': [video]},
-        {'id': '4c732921-0aa2-43db-a22e-e57a0e81dfe8', 'score': 0.95747626, 'recordings': [
-            node('02875e5a-101b-49a0-b5ec-c8d58dc39d24', 302.0, 1, ep, '6ce91498-f397-4261-a895-4529a0bcb974',
-                 {'year': 2022, 'month': 7, 'day': 9}, 9, 1),
-            dict(video, sources=9),
-        ]},
-    ]}
+    video = node(
+        GAGA_RECORDING,
+        315.0,
+        61,
+        single,
+        '04f101f9-ec94-44e5-ada0-ad008e4ba143',
+        {'year': 2009, 'month': 11, 'day': 19},
+        5,
+        5,
+    )
+    return {
+        'status': 'ok',
+        'results': [
+            {'id': '3a3c45ec-c01d-4c92-b96f-554b0eb0f700', 'score': 0.9718486, 'recordings': [video]},
+            {
+                'id': '4c732921-0aa2-43db-a22e-e57a0e81dfe8',
+                'score': 0.95747626,
+                'recordings': [
+                    node(
+                        '02875e5a-101b-49a0-b5ec-c8d58dc39d24',
+                        302.0,
+                        1,
+                        ep,
+                        '6ce91498-f397-4261-a895-4529a0bcb974',
+                        {'year': 2022, 'month': 7, 'day': 9},
+                        9,
+                        1,
+                    ),
+                    dict(video, sources=9),
+                ],
+            },
+        ],
+    }
 
 
 def resolved_acoustid_recordings(document):
@@ -1356,18 +1468,33 @@ class FilenameTemplateTest(SmartScanPolicyTestCase):
     def hints(self, filename, **tags):
         return file_hints(loaded_metadata(filename, **tags), filename)
 
-    @subtest_cases('filename,artist,title', [
-        (GAGA_FILENAME, 'Lady Gaga', 'Bad Romance'),
-        ("173-RHINO - Sugar Ray - When It's Over (Official Music Video) [xmLv8rfunPo].mp4",
-         'Sugar Ray', "When It's Over"),
-        ('075-Backstreet Boys - Backstreet Boys - Shape Of My Heart (Official HD Video) [OT5msu-dap8].mp4',
-         'Backstreet Boys', 'Shape Of My Heart'),
-        ('096-Usher - Usher, Alicia Keys - My Boo (Official Video) [fPgf2meEX1w].mp4',
-         'Usher, Alicia Keys', 'My Boo'),
-        ("124-Fergie - Fergie - Big Girls Don't Cry (Personal) (Extended Version) [E6sqA9QtV5I].mp4",
-         'Fergie', "Big Girls Don't Cry (Personal) (Extended Version)"),
-        ('1086-Άννα Βίσση - Άννα Βίσση - Δέλτα (Official Video) [Xk3pQ9rT2bM].mp4', 'Άννα Βίσση', 'Δέλτα'),
-    ])
+    @subtest_cases(
+        'filename,artist,title',
+        [
+            (GAGA_FILENAME, 'Lady Gaga', 'Bad Romance'),
+            (
+                "173-RHINO - Sugar Ray - When It's Over (Official Music Video) [xmLv8rfunPo].mp4",
+                'Sugar Ray',
+                "When It's Over",
+            ),
+            (
+                '075-Backstreet Boys - Backstreet Boys - Shape Of My Heart (Official HD Video) [OT5msu-dap8].mp4',
+                'Backstreet Boys',
+                'Shape Of My Heart',
+            ),
+            (
+                '096-Usher - Usher, Alicia Keys - My Boo (Official Video) [fPgf2meEX1w].mp4',
+                'Usher, Alicia Keys',
+                'My Boo',
+            ),
+            (
+                "124-Fergie - Fergie - Big Girls Don't Cry (Personal) (Extended Version) [E6sqA9QtV5I].mp4",
+                'Fergie',
+                "Big Girls Don't Cry (Personal) (Extended Version)",
+            ),
+            ('1086-Άννα Βίσση - Άννα Βίσση - Δέλτα (Official Video) [Xk3pQ9rT2bM].mp4', 'Άννα Βίσση', 'Δέλτα'),
+        ],
+    )
     def test_playlist_template_uploader_is_not_the_artist(self, filename, artist, title):
         hints = self.hints(filename)
         self.assertEqual((artist, title, 'filename'), (hints.artist, hints.title, hints.artist_source))
@@ -1383,21 +1510,26 @@ class FilenameTemplateTest(SmartScanPolicyTestCase):
 
     def test_embedded_tags_still_take_priority_over_the_template(self):
         hints = self.hints(GAGA_FILENAME, artist='Σάκης Ρουβάς', title='Σ’ έχω ερωτευτεί')
-        self.assertEqual(('Σάκης Ρουβάς', 'tag', 'Σ’ έχω ερωτευτεί', 'tag'),
-                         (hints.artist, hints.artist_source, hints.title, hints.title_source))
+        self.assertEqual(
+            ('Σάκης Ρουβάς', 'tag', 'Σ’ έχω ερωτευτεί', 'tag'),
+            (hints.artist, hints.artist_source, hints.title, hints.title_source),
+        )
 
-    @subtest_cases('filename,parsed', [
-        # Spaced track numbers are handled as before.
-        ('080 - Shaboozey - A Bar Song (Tipsy).mp3', ('Shaboozey', 'A Bar Song (Tipsy)')),
-        # A title that starts with digits and a hyphen, without a video id.
-        ('867-5309Jenny, LIVE.mp4', None),
-        # Without a video id the template is not identified.
-        ('437-Lady Gaga - Lady Gaga - Bad Romance.mp4', ('437-Lady Gaga', 'Bad Romance')),
-        # A year is not a playlist index.
-        ('2012-Adele - Skyfall [DeumyOzKqgI].mp4', ('2012-Adele', 'Skyfall')),
-        # One- and two-digit prefixes are not the template.
-        ('12-Two Door Cinema Club - What You Know [_ZAn9lB3pTU].mp4', ('12-Two Door Cinema Club', 'What You Know')),
-    ])
+    @subtest_cases(
+        'filename,parsed',
+        [
+            # Spaced track numbers are handled as before.
+            ('080 - Shaboozey - A Bar Song (Tipsy).mp3', ('Shaboozey', 'A Bar Song (Tipsy)')),
+            # A title that starts with digits and a hyphen, without a video id.
+            ('867-5309Jenny, LIVE.mp4', None),
+            # Without a video id the template is not identified.
+            ('437-Lady Gaga - Lady Gaga - Bad Romance.mp4', ('437-Lady Gaga', 'Bad Romance')),
+            # A year is not a playlist index.
+            ('2012-Adele - Skyfall [DeumyOzKqgI].mp4', ('2012-Adele', 'Skyfall')),
+            # One- and two-digit prefixes are not the template.
+            ('12-Two Door Cinema Club - What You Know [_ZAn9lB3pTU].mp4', ('12-Two Door Cinema Club', 'What You Know')),
+        ],
+    )
     def test_ordinary_numbered_names_are_unchanged(self, filename, parsed):
         self.assertEqual(parsed, smartscan.filename_artist_title(filename))
 
@@ -1410,28 +1542,40 @@ class FilenameTemplateTest(SmartScanPolicyTestCase):
         self.assertEqual('Visualize Me', split_title('Visualize Me').base)
         self.assertEqual(frozenset({'live'}), split_title('Song (Live) [Official Visualizer]').versions)
 
-    @subtest_cases('filename,parsed', [
-        ("Fergie - The Dutchess - Big Girls Don't Cry (Extended Version).mp3",
-         ('Fergie', "Big Girls Don't Cry (Extended Version)")),
-        ('Artist - Album - Song (Live).mp3', ('Artist', 'Song (Live)')),
-        ('Artist - Album - Song (Radio Edit) [Remastered].mp3', ('Artist', 'Song (Radio Edit) (Remastered)')),
-        # A part that only qualifies the title before it stays attached.
-        ('Artist - Song - Live.mp3', ('Artist', 'Song - Live')),
-        ('Artist - Song - (Radio Edit).mp3', ('Artist', 'Song - (Radio Edit)')),
-        ('Artist - Song - Remastered 2011.mp3', ('Artist', 'Song - Remastered 2011')),
-        ('Artist - Song - feat. Other.mp3', ('Artist', 'Song - feat. Other')),
-        # A source label is not title text (real names from the local collection).
-        ('060 - The Rolling Stones - Rain Fall Down - OFFICIAL PROMO (EXPLICIT).mp4',
-         ('The Rolling Stones', 'Rain Fall Down - OFFICIAL PROMO (EXPLICIT)')),
-        ('070 - The Rolling Stones - Streets Of Love - OFFICIAL PROMO.mp4', ('The Rolling Stones', 'Streets Of Love')),
-    ])
+    @subtest_cases(
+        'filename,parsed',
+        [
+            (
+                "Fergie - The Dutchess - Big Girls Don't Cry (Extended Version).mp3",
+                ('Fergie', "Big Girls Don't Cry (Extended Version)"),
+            ),
+            ('Artist - Album - Song (Live).mp3', ('Artist', 'Song (Live)')),
+            ('Artist - Album - Song (Radio Edit) [Remastered].mp3', ('Artist', 'Song (Radio Edit) (Remastered)')),
+            # A part that only qualifies the title before it stays attached.
+            ('Artist - Song - Live.mp3', ('Artist', 'Song - Live')),
+            ('Artist - Song - (Radio Edit).mp3', ('Artist', 'Song - (Radio Edit)')),
+            ('Artist - Song - Remastered 2011.mp3', ('Artist', 'Song - Remastered 2011')),
+            ('Artist - Song - feat. Other.mp3', ('Artist', 'Song - feat. Other')),
+            # A source label is not title text (real names from the local collection).
+            (
+                '060 - The Rolling Stones - Rain Fall Down - OFFICIAL PROMO (EXPLICIT).mp4',
+                ('The Rolling Stones', 'Rain Fall Down - OFFICIAL PROMO (EXPLICIT)'),
+            ),
+            (
+                '070 - The Rolling Stones - Streets Of Love - OFFICIAL PROMO.mp4',
+                ('The Rolling Stones', 'Streets Of Love'),
+            ),
+        ],
+    )
     def test_three_part_names_with_version_qualifiers(self, filename, parsed):
         self.assertEqual(parsed, smartscan.filename_artist_title(filename))
 
     def test_playlist_template_with_fingerprint_matches_the_recording(self):
         decision = self.decide(
-            Source.ACOUSTID, resolved_acoustid_recordings(gaga_acoustid_document()),
-            loaded_metadata(GAGA_FILENAME, GAGA_LENGTH), GAGA_FILENAME,
+            Source.ACOUSTID,
+            resolved_acoustid_recordings(gaga_acoustid_document()),
+            loaded_metadata(GAGA_FILENAME, GAGA_LENGTH),
+            GAGA_FILENAME,
         )
         self.assertEqual((Outcome.MATCHED, GAGA_RECORDING), (decision.outcome, decision.recording_id))
 
@@ -1461,12 +1605,13 @@ class FilenameTemplateTest(SmartScanPolicyTestCase):
 
 
 class ReviewLookupPolicyTest(SmartScanPolicyTestCase):
-    BSB = dict(title='Larger Than Life', artist='Backstreet Boys')
+    BSB: ClassVar[dict[str, str]] = dict(title='Larger Than Life', artist='Backstreet Boys')
 
     def conflict(self):
         # Strong fingerprint for a different song than the file names.
         return self.decide(
-            Source.ACOUSTID, [acoustid_recording('halo', 'Halo', 'Beyoncé', 232 * SECOND, 0.98)],
+            Source.ACOUSTID,
+            [acoustid_recording('halo', 'Halo', 'Beyoncé', 232 * SECOND, 0.98)],
             file_metadata(232 * SECOND, **self.BSB),
         )
 
@@ -1481,8 +1626,10 @@ class ReviewLookupPolicyTest(SmartScanPolicyTestCase):
         self.assertFalse(smartscan.metadata_lookup_useful(pink, file_hints(file_metadata(PINK_LENGTH), PINK_FILENAME)))
         caption = 'Something completely different from the song.mp3'
         unnamed = self.decide(
-            Source.ACOUSTID, [acoustid_recording('halo', 'Halo', 'Beyoncé', 232 * SECOND, 0.98)],
-            loaded_metadata(caption, 232 * SECOND), caption,
+            Source.ACOUSTID,
+            [acoustid_recording('halo', 'Halo', 'Beyoncé', 232 * SECOND, 0.98)],
+            loaded_metadata(caption, 232 * SECOND),
+            caption,
         )
         self.assertEqual(Outcome.NEEDS_REVIEW, unnamed.outcome)
         self.assertFalse(smartscan.metadata_lookup_useful(unnamed, file_hints(loaded_metadata(caption), caption)))
@@ -1537,8 +1684,16 @@ class SmartScanFileTestCase(PicardTestCase):
         super().setUp()
         self.set_config_values(BASE_SETTINGS)
         self.patch_tagger_instance('picard.item')
-        for name in ('window', 'acoustidmanager', 'isrc_submit_manager', 'webservice', '_acoustid', 'mb_api',
-                     'move_file_to_track', 'move_file_to_nat'):
+        for name in (
+            'window',
+            'acoustidmanager',
+            'isrc_submit_manager',
+            'webservice',
+            '_acoustid',
+            'mb_api',
+            'move_file_to_track',
+            'move_file_to_nat',
+        ):
             setattr(self.tagger, name, MagicMock())
         self.tasks = []
 
@@ -1618,7 +1773,8 @@ class ReviewLookupFileTest(SmartScanFileTestCase):
         self.assertEqual('', self.file.metadata['artist'])
         # The fingerprint contradicts the text: only the file name is offered.
         self.assertEqual(
-            {'artist': ('Beyoncé', 'Filename'), 'title': ('Larger Than Life', 'Filename')}, self.suggested(),
+            {'artist': ('Beyoncé', 'Filename'), 'title': ('Larger Than Life', 'Filename')},
+            self.suggested(),
         )
 
     def test_duration_conflict_does_not_search_and_offers_unverified_file_name_values(self):
@@ -1655,9 +1811,22 @@ class ReviewLookupFileTest(SmartScanFileTestCase):
         first_lookup = self.tagger.mb_api.find_tracks.call_args
         self.file.clear_lookup_task()
         second = self.start()
-        second({'recordings': [acoustid_recording(
-            'bsb', 'Larger Than Life', 'Backstreet Boys', 232 * SECOND, 0.95, BSB_RELEASES,
-        )]}, None, None)
+        second(
+            {
+                'recordings': [
+                    acoustid_recording(
+                        'bsb',
+                        'Larger Than Life',
+                        'Backstreet Boys',
+                        232 * SECOND,
+                        0.95,
+                        BSB_RELEASES,
+                    )
+                ]
+            },
+            None,
+            None,
+        )
         decision = self.file.smart_scan_decision
         self.assertEqual(Outcome.MATCHED, decision.outcome)
         self.lookup_reply(recording('x', 'Larger Than Life', 'Backstreet Boys', 232 * SECOND), call=first_lookup)
@@ -1754,7 +1923,8 @@ class TagSuggestionFileTest(SmartScanFileTestCase):
         self.lookup_reply()
         self.assertEqual(Outcome.NO_MATCH, self.file.smart_scan_decision.outcome)
         self.assertEqual(
-            {'artist': ('Backstreet Boys', 'Filename'), 'title': ('Larger Than Life', 'Filename')}, self.suggested(),
+            {'artist': ('Backstreet Boys', 'Filename'), 'title': ('Larger Than Life', 'Filename')},
+            self.suggested(),
         )
 
     def test_embedded_tags_take_priority(self):
@@ -1813,11 +1983,22 @@ class ConfirmResultsTest(SmartScanFileTestCase):
 
     def setUp(self):
         super().setUp()
-        self.set_config_values(dict(
-            BASE_SETTINGS, use_genres=True, min_genre_usage=50, max_genres=5, genres_filter='', join_genres='',
-            folksonomy_tags=False, only_my_genres=False, smart_genre_lastfm_enabled=False, lastfm_api_key='',
-            dlmtags_discogs_enabled=False, dlmtags_discogs_token='',
-        ))
+        self.set_config_values(
+            dict(
+                BASE_SETTINGS,
+                use_genres=True,
+                min_genre_usage=50,
+                max_genres=5,
+                genres_filter='',
+                join_genres='',
+                folksonomy_tags=False,
+                only_my_genres=False,
+                smart_genre_lastfm_enabled=False,
+                lastfm_api_key='',
+                dlmtags_discogs_enabled=False,
+                dlmtags_discogs_token='',
+            )
+        )
         self.tagger.albums = {}
 
     def pink_review(self):
@@ -1852,19 +2033,69 @@ class ConfirmResultsTest(SmartScanFileTestCase):
         self.assertTrue(self.file.confirm_recording(review, PINK_RECORDING))
         decision = self.file.smart_scan_decision
         self.assertEqual(
-            (Outcome.MATCHED, True, PINK_RECORDING), (decision.outcome, decision.user_confirmed, decision.recording_id),
+            (Outcome.MATCHED, True, PINK_RECORDING),
+            (decision.outcome, decision.user_confirmed, decision.recording_id),
         )
         # The duration conflict is kept, not resolved.
         self.assertIn(Reason.LENGTH_MISMATCH, decision.notes)
         self.assertTrue(decision.describe().startswith('Confirmed by user'))
         metadata = self.file.metadata
         self.assertEqual(
-            ('P!nk + Willow Sage Hart', 'Cover Me in Sunshine', PINK_RECORDING),
+            ('P!nk + Willow Sage Hart', 'Cover Me in Sunshine', ''),
             (metadata['artist'], metadata['title'], metadata['musicbrainz_recordingid']),
         )
         self.assertEqual('MusicBrainz', source_for(self.file, 'artist'))
         self.assertFalse({'artist', 'title'} & set(self.suggested()))
-        self.tagger.move_file_to_nat.assert_called_once_with(self.file, PINK_RECORDING)
+        self.tagger.move_file_to_nat.assert_not_called()
+        self.tagger.move_file_to_track.assert_not_called()
+
+    def test_confirmed_four_field_review_applies_only_explicit_choices(self):
+        review = self.pink_review()
+        before = {tag: tuple(self.file.metadata.getall(tag)) for tag in ('date', 'genre')}
+        original_title = self.file.metadata.getall('title')
+        self.assertFalse(self.file.confirm_recording(review, PINK_RECORDING, approved_identity_tags={'album'}))
+        self.assertIs(review, self.file.smart_scan_decision)
+        self.assertTrue(self.file.confirm_recording(review, PINK_RECORDING, approved_identity_tags={'artist'}))
+        self.assertEqual(original_title, self.file.metadata.getall('title'))
+        self.assertEqual('P!nk + Willow Sage Hart', self.file.metadata['artist'])
+        decision = self.file.smart_scan_decision
+        self.genre_reply({'id': PINK_RECORDING, 'genres': [{'name': 'pop', 'count': 4}]})
+        self.assertFalse(self.file.apply_confirmed_suggestions(decision, {'album'}, before))
+        self.assertEqual(before['date'], tuple(self.file.metadata.getall('date')))
+        self.assertEqual(before['genre'], tuple(self.file.metadata.getall('genre')))
+        self.assertTrue(self.file.apply_confirmed_suggestions(decision, {'date', 'genre'}, before))
+        self.assertEqual('2021-02-12', self.file.metadata['date'])
+        self.assertEqual(['Pop'], self.file.metadata.getall('genre'))
+
+    def test_confirmation_application_rejects_unrelated_recording_tags(self):
+        review = self.pink_review()
+        self.file.metadata['album'] = 'Keep album'
+        self.file.metadata['comment'] = 'Keep comment'
+        self.file.metadata['date'] = '2000'
+        self.file.metadata['genre'] = 'Keep genre'
+        self.file.metadata.images.append(create_image(b'own', types=['front']))
+        before_images = self.file.metadata.images.copy()
+
+        def polluted_recording(_track, metadata):
+            metadata['artist'] = 'Verified artist'
+            metadata['title'] = 'Verified title'
+            metadata['album'] = 'Unexpected album'
+            metadata['comment'] = 'Unexpected comment'
+            metadata['date'] = '2030'
+            metadata['genre'] = 'Unexpected genre'
+            metadata['musicbrainz_recordingid'] = PINK_RECORDING
+
+        with patch('picard.file.recording_to_metadata', side_effect=polluted_recording):
+            self.assertTrue(self.file.confirm_recording(review, PINK_RECORDING))
+        self.assertEqual(['Keep album'], self.file.metadata.getall('album'))
+        self.assertEqual(['Keep comment'], self.file.metadata.getall('comment'))
+        self.assertEqual(['2000'], self.file.metadata.getall('date'))
+        self.assertEqual(['Keep genre'], self.file.metadata.getall('genre'))
+        self.assertEqual('', self.file.metadata['musicbrainz_recordingid'])
+        self.assertEqual(before_images, self.file.metadata.images)
+        self.assertEqual('Verified artist', self.file.metadata['artist'])
+        self.assertEqual('Verified title', self.file.metadata['title'])
+        self.tagger.move_file_to_nat.assert_not_called()
         self.tagger.move_file_to_track.assert_not_called()
 
     def test_no_repeated_discovery_or_credit_lookup(self):
@@ -1894,7 +2125,8 @@ class ConfirmResultsTest(SmartScanFileTestCase):
         self.assertIsNone(smartscan.preselected_recording(recordings))
         self.assertTrue(self.file.confirm_recording(review, 'duet'))
         self.assertEqual(
-            ('Artist; Friend', 'duet'), (self.file.metadata['artist'], self.file.smart_scan_decision.recording_id),
+            ('Artist; Friend', 'duet'),
+            (self.file.metadata['artist'], self.file.smart_scan_decision.recording_id),
         )
 
     def test_manual_edits_are_kept_unless_replacing_is_approved(self):
@@ -1903,7 +2135,8 @@ class ConfirmResultsTest(SmartScanFileTestCase):
         self.assertEqual(['title'], self.file.manual_identity_edits())
         self.assertTrue(self.file.confirm_recording(review, PINK_RECORDING))
         self.assertEqual(
-            ('P!nk + Willow Sage Hart', 'My Title'), (self.file.metadata['artist'], self.file.metadata['title']),
+            ('P!nk + Willow Sage Hart', 'My Title'),
+            (self.file.metadata['artist'], self.file.metadata['title']),
         )
         review = self.pink_review()
         self.file.metadata['title'] = 'My Title'
@@ -1920,10 +2153,19 @@ class ConfirmResultsTest(SmartScanFileTestCase):
         self.assertEqual('', self.file.metadata['album'])
         browse = self.tagger.mb_api.browse_releases.call_args
         self.assertEqual(PINK_RECORDING, browse.kwargs['recording'])
-        browse.args[0]({'releases': [
-            release('single', 'Cover Me in Sunshine', '2021-02-12', primary='Single', status='Official', tracks=1),
-            release('setlist', 'All I Know So Far: Setlist', '2021', secondary=['Live'], status='Official'),
-        ], 'release-count': 2}, None, None)
+        browse.args[0](
+            {
+                'releases': [
+                    release(
+                        'single', 'Cover Me in Sunshine', '2021-02-12', primary='Single', status='Official', tracks=1
+                    ),
+                    release('setlist', 'All I Know So Far: Setlist', '2021', secondary=['Live'], status='Official'),
+                ],
+                'release-count': 2,
+            },
+            None,
+            None,
+        )
         self.assertEqual(
             {'Cover Me in Sunshine', 'All I Know So Far: Setlist'},
             {c.values[0] for c in self.file.dlmtags_album_suggestions},
@@ -1944,7 +2186,7 @@ class ConfirmResultsTest(SmartScanFileTestCase):
         self.assertEqual(('', ''), (self.file.metadata['date'], self.file.metadata['genre']))
         self.assertEqual(PINK_RECORDING, recording_for_artwork(self.file))
 
-    def test_discogs_genre_and_style_suggestions(self):
+    def test_discogs_genre_cannot_suggest_style_after_confirmation(self):
         self.set_config_values({'dlmtags_discogs_enabled': True, 'dlmtags_discogs_token': 'test-token'})
         review = self.pink_review()
         with patch('picard.smartgenre.DiscogsGenreRequest') as factory:
@@ -1953,7 +2195,7 @@ class ConfirmResultsTest(SmartScanFileTestCase):
             self.genre_reply()
             factory.return_value.finished.connect.call_args.args[0](['Pop'], 'https://www.discogs.com/release/1')
         suggested = self.suggested()
-        self.assertEqual(('Ballad', 'Discogs verified single-track release'), suggested['style'])
+        self.assertNotIn('style', suggested)
         self.assertEqual('Discogs verified single-track release', suggested['genre'][1])
         self.assertEqual(('', ''), (self.file.metadata['genre'], self.file.metadata['style']))
 
@@ -1963,7 +2205,9 @@ class ConfirmResultsTest(SmartScanFileTestCase):
         self.genre_reply(b'', QNetworkReply.NetworkError.ServiceUnavailableError)
         self.assertNotIn('genre', self.suggested())
         self.tagger.mb_api.browse_releases.call_args.args[0](
-            b'', None, QNetworkReply.NetworkError.ServiceUnavailableError,
+            b'',
+            None,
+            QNetworkReply.NetworkError.ServiceUnavailableError,
         )
         self.assertEqual([], self.file.dlmtags_album_suggestions)
         self.assertEqual('', self.file.metadata['album'])

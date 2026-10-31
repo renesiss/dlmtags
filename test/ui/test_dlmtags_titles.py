@@ -1,6 +1,9 @@
 """DLMtags window chrome keeps its own name without changing Picard attribution."""
 
-from PyQt6 import QtWidgets
+from PyQt6 import (
+    QtGui,
+    QtWidgets,
+)
 
 import pytest
 
@@ -33,13 +36,16 @@ def test_parentless_dialog_title_uses_dlmtags(qapp):
     dialog.deleteLater()
 
 
-def test_about_dialog_title_keeps_picard_attribution(qapp, monkeypatch):
+def test_about_dialog_uses_dlmtags_identity(qapp, monkeypatch):
     monkeypatch.setattr('picard.ui.tagger_instance', lambda: object())
     monkeypatch.setattr(AboutDialog, '_apply_styling', lambda _self: None)
     monkeypatch.setattr(AboutDialog, '_update_content', lambda _self: None)
     parent = QtWidgets.QWidget()
     dialog = AboutDialog(parent)
     assert dialog.windowTitle() == 'About DLMtags'
-    assert dialog.ui.app_name.text() == 'MusicBrainz Picard'
+    assert dialog.ui.app_name.text() == 'DLMtags'
+    icon = QtGui.QPixmap(':/images/dlmtags-icon.png')
+    assert not icon.isNull()
+    assert dialog.ui.logo.pixmap().toImage() == icon.toImage()
     dialog.deleteLater()
     parent.deleteLater()

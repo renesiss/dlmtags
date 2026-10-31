@@ -1316,3 +1316,44 @@ class FileIdentityLifecycleTest(PicardTestCase):
         self.file._save.assert_called_once()
         # The diagnostic warning was logged instead of propagating the error.
         self.assertTrue(mock_log.warning.called)
+
+    @patch('picard.util.emptydir.rm_empty_dir')
+    def test_hidden_file_organization_settings_cannot_run_during_save(self, remove_dir):
+        self.set_config_values(
+            {
+                'rename_files': True,
+                'move_files': True,
+                'move_additional_files': True,
+                'delete_empty_dirs': True,
+                'save_images_to_files': True,
+            }
+        )
+        self.file._save = Mock()
+        self.file._rename = Mock()
+        self.file._move_additional_files = Mock()
+        self.file._save_images = Mock()
+
+        result = self.file._save_and_rename(self.file.filename, self.file.metadata)
+
+        self.assertEqual(self.file.filename, result)
+        self.file._save.assert_called_once()
+        self.file._rename.assert_not_called()
+        self.file._move_additional_files.assert_not_called()
+        self.file._save_images.assert_not_called()
+        remove_dir.assert_not_called()
+
+    def test_hidden_destructive_metadata_settings_refuse_save(self):
+        self.file._save = Mock()
+        for name in (
+            'clear_existing_tags',
+            'remove_images_from_tags',
+            'remove_ape_from_aac',
+            'remove_ape_from_ac3',
+            'remove_wave_riff_info',
+        ):
+            with self.subTest(name=name):
+                self.set_config_values({name: True})
+                with self.assertRaisesRegex(ValueError, name):
+                    self.file._save_and_rename(self.file.filename, self.file.metadata)
+                self.file._save.assert_not_called()
+                self.set_config_values({name: False})

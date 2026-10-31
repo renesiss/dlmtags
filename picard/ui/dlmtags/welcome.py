@@ -25,15 +25,15 @@ class DLMtagsWelcomeDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName('dlmtagsWelcomeDialog')
-        self.setWindowTitle(_('Protect your music library'))
+        self.setWindowTitle(_('Welcome to DLMtags'))
         self.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
-        self.setMinimumWidth(620)
+        self.setMinimumWidth(700)
         self.setSizeGripEnabled(False)
         style_component(self, 'welcomeDialog')
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 18)
-        layout.setSpacing(14)
+        layout.setSpacing(9)
 
         header = QtWidgets.QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
@@ -54,7 +54,7 @@ class DLMtagsWelcomeDialog(QtWidgets.QDialog):
         logo.setAccessibleName(_('DLMtags logo'))
         header.addWidget(logo, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
 
-        self.title_label = QtWidgets.QLabel(_('Protect your music library'), self)
+        self.title_label = QtWidgets.QLabel(_('Welcome to DLMtags'), self)
         self.title_label.setObjectName('dlmtagsWelcomeTitle')
         self.title_label.setWordWrap(True)
         header.addWidget(self.title_label, 1, QtCore.Qt.AlignmentFlag.AlignVCenter)
@@ -70,6 +70,33 @@ class DLMtagsWelcomeDialog(QtWidgets.QDialog):
         self.intro_label.setObjectName('dlmtagsWelcomeIntro')
         self.intro_label.setWordWrap(True)
         layout.addWidget(self.intro_label)
+
+        features_heading = QtWidgets.QLabel(_('What can DLMtags do?'), self)
+        features_heading.setObjectName('dlmtagsWelcomeFeatures')
+        layout.addWidget(features_heading)
+
+        features = (
+            (_('Smart Scan & Bulk Auto-Tag'),
+             _('Suggest Title, Artist, Year and Genre automatically.')),
+            (_('Review & Confirm'),
+             _('Check suggested metadata and confirm the results before saving.')),
+            (_('Manual Tag Editing'),
+             _('Correct metadata yourself whenever needed.')),
+            (_('Keep Your File Structure'),
+             _('DLMtags edits metadata without reorganizing your music folders.')),
+        )
+
+        features_layout = QtWidgets.QVBoxLayout()
+        features_layout.setSpacing(5)
+
+        for heading, description in features:
+            feature = QtWidgets.QLabel(
+                f'<b>{heading}</b> — {description}', self
+            )
+            feature.setWordWrap(True)
+            features_layout.addWidget(feature)
+
+        layout.addLayout(features_layout)
 
         recommendation_heading = QtWidgets.QLabel(_('We recommend:'), self)
         recommendation_heading.setObjectName('dlmtagsWelcomeRecommendationHeading')
@@ -121,7 +148,7 @@ class DLMtagsWelcomeDialog(QtWidgets.QDialog):
         layout.addLayout(footer)
 
         self.adjustSize()
-        self.resize(620, self.sizeHint().height())
+        self.resize(700, self.sizeHint().height())
 
     def show_startup_warning(self):
         """Show once per process; return whether the preference stays enabled."""

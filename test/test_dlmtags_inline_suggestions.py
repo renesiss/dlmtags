@@ -337,48 +337,32 @@ class TagFormSuggestionTest(InlineTestCase):
         )
         self.assertEqual(Outcome.NEEDS_REVIEW, self.file.smart_scan_decision.outcome)
 
-    def test_single_candidate_is_confirmed_directly_from_new_tags(self):
+    def test_single_candidate_opens_four_field_review_from_new_tags(self):
         self.pink_review()
         editor = self.editor()
         self.assertFalse(editor.confirm_banner.isHidden())
         self.assertEqual('Confirm', editor.confirm_results_button.text())
         self.assertIn('P!nk + Willow Sage Hart — Cover Me in Sunshine', editor.confirm_message.text())
         self.assertIn('Length mismatch', editor.confirm_message.text())
+        before = Metadata(self.file.metadata)
         with patch('picard.ui.dlmtags.tag_form.ConfirmResultsDialog') as dialog, patch.object(File, 'save') as save:
             editor.confirm_results_button.click()
-        dialog.assert_not_called()
+        dialog.assert_called_once_with(self.file, editor)
+        dialog.return_value.open.assert_called_once()
         save.assert_not_called()
-        decision = self.file.smart_scan_decision
-        self.assertEqual(
-            (Outcome.MATCHED, True, PINK_RECORDING),
-            (
-                decision.outcome,
-                decision.user_confirmed,
-                decision.recording_id,
-            ),
-        )
-        self.assertIn(Reason.LENGTH_MISMATCH, decision.notes)
-        self.assertEqual(
-            ('P!nk + Willow Sage Hart', 'Cover Me in Sunshine'),
-            (self.file.metadata['artist'], self.file.metadata['title']),
-        )
-        self.assertEqual('MusicBrainz', source_for(self.file, 'artist'))
-        # The remaining tags are searched with the existing album suggestions.
-        self.assertEqual(PINK_RECORDING, self.tagger.mb_api.browse_releases.call_args.kwargs['recording'])
-        self.assertEqual('', self.file.metadata['album'])
-        editor.refresh()
-        self.assertTrue(editor.confirm_banner.isHidden())
+        self.assertEqual(before, self.file.metadata)
+        self.assertEqual(Outcome.NEEDS_REVIEW, self.file.smart_scan_decision.outcome)
 
-    def test_direct_confirmation_keeps_manual_edits(self):
+    def test_single_candidate_review_keeps_manual_edits_until_approved(self):
         self.pink_review()
         self.file.metadata['title'] = 'My Title'
         editor = self.editor()
         self.assertIn('Your edits to Title are kept', editor.confirm_message.text())
         with patch('picard.ui.dlmtags.tag_form.ConfirmResultsDialog') as dialog:
             editor.confirm_results_button.click()
-        dialog.assert_not_called()
+        dialog.assert_called_once_with(self.file, editor)
         self.assertEqual(
-            ('P!nk + Willow Sage Hart', 'My Title'),
+            ('', 'My Title'),
             (self.file.metadata['artist'], self.file.metadata['title']),
         )
 
@@ -715,6 +699,14 @@ class DLMtagsSettingsVisibilityTest(InlineTestCase):
 
 
 class MatchingResultsTest(InlineTestCase):
+    def genre_reply(self, document):
+        calls = [
+            call for call in self.tagger.mb_api.get_track_by_id.call_args_list
+            if {'genres', 'tags', 'user-genres', 'user-tags'} & set(call.kwargs.get('inc') or ())
+        ]
+        self.assertEqual(1, len(calls))
+        calls[0].args[1](document, None, None)
+
     def results(self):
         window = MagicMock()
         window.action_map = {
@@ -789,6 +781,61 @@ class MatchingResultsTest(InlineTestCase):
         self.assertEqual('P!nk + Willow Sage Hart', self.file.metadata['artist'])
         results.set_files({self.file})
         self.assertEqual('Confirmed by user', results.status_label.text())
+
+    def test_confirm_results_reviews_year_and_async_genre_per_field(self):
+        self.set_config_values({'use_genres': True, 'min_genre_usage': 1})
+        self.pink_review()
+        dialog = ConfirmResultsDialog(self.file)
+        self.addCleanup(dialog.deleteLater)
+        self.assertEqual('', self.file.metadata['date'])
+        self.assertEqual('2021-02-12', dialog.proposed_labels['date'].text())
+        self.assertEqual('Empty', dialog.current_labels['date'].text())
+        self.assertFalse(dialog.approve_checks['date'].isChecked())
+        self.assertFalse(dialog.approve_checks['genre'].isEnabled())
+        dialog.approve_checks['date'].setChecked(True)
+        before = Metadata(self.file.metadata)
+        dialog.accept()
+        self.assertTrue(dialog._confirmed)
+        self.assertEqual(before.getall('date'), self.file.metadata.getall('date'))
+        self.genre_reply({'id': PINK_RECORDING, 'genres': [{'name': 'pop', 'count': 4}]})
+        dialog._refresh_suggestions()
+        self.assertEqual('Pop', dialog.proposed_labels['genre'].text())
+        self.assertTrue(dialog.approve_checks['genre'].isEnabled())
+        self.assertFalse(dialog.approve_checks['genre'].isChecked())
+        dialog.approve_checks['genre'].setChecked(True)
+        dialog.accept()
+        self.assertEqual('2021-02-12', self.file.metadata['date'])
+        self.assertEqual(['Pop'], self.file.metadata.getall('genre'))
+        self.assertEqual(before.getall('album'), self.file.metadata.getall('album'))
+        self.assertEqual(before.images, self.file.metadata.images)
+
+    def test_confirm_results_can_reject_year_and_genre_after_recording_confirmation(self):
+        self.set_config_values({'use_genres': True, 'min_genre_usage': 1})
+        self.pink_review()
+        dialog = ConfirmResultsDialog(self.file)
+        self.addCleanup(dialog.deleteLater)
+        dialog.accept()
+        self.genre_reply({'id': PINK_RECORDING, 'genres': [{'name': 'pop', 'count': 4}]})
+        dialog._refresh_suggestions()
+        dialog.reject()
+        self.assertEqual('', self.file.metadata['date'])
+        self.assertEqual('', self.file.metadata['genre'])
+
+    def test_confirm_results_stale_genre_review_does_not_apply_year(self):
+        self.set_config_values({'use_genres': True, 'min_genre_usage': 1})
+        self.pink_review()
+        dialog = ConfirmResultsDialog(self.file)
+        self.addCleanup(dialog.deleteLater)
+        dialog.accept()
+        self.genre_reply({'id': PINK_RECORDING, 'genres': [{'name': 'pop', 'count': 4}]})
+        dialog._refresh_suggestions()
+        dialog.approve_checks['date'].setChecked(True)
+        dialog.approve_checks['genre'].setChecked(True)
+        self.file.metadata['genre'] = 'My genre'
+        dialog.accept()
+        self.assertEqual('', self.file.metadata['date'])
+        self.assertEqual('My genre', self.file.metadata['genre'])
+        self.assertFalse(dialog.error_label.isHidden())
 
     def test_ambiguous_recordings_need_a_selection(self):
         TagFormSuggestionTest.two_plausible_recordings(self)

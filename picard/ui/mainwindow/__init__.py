@@ -194,7 +194,6 @@ from picard.ui.statusindicator import (
 )
 from picard.ui.tagsfromfilenames import TagsFromFileNamesDialog
 from picard.ui.theme import theme
-from picard.ui.tutorial import TutorialManager
 from picard.ui.util import (
     FileDialog,
     find_starting_directory,
@@ -296,7 +295,6 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
         self._check_and_repair_naming_scripts()
         self._check_and_repair_profiles()
 
-        self.tutorial = TutorialManager(self)
 
         self.setupUi()
         self._save_notifications = SaveToastManager(self)
@@ -1346,7 +1344,6 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
             config = get_config()
             config.persist['current_directory'] = os.path.dirname(files[0])
             self.tagger.add_files(files)
-            self.tutorial.show('add_files')
 
     def add_directory(self):
         """Add directory to the tagger."""
@@ -1383,7 +1380,6 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
                 )
 
             self.tagger.add_paths(dir_list)
-            self.tutorial.show('add_files')
 
     def close_active_window(self):
         self.tagger.activeWindow().close()
@@ -1445,7 +1441,6 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
 
     def save(self):
         """Tell the tagger to save the selected objects."""
-        self.tutorial.show('save')
         files = list(iter_files_from_objects(self.selected_objects, save=True))
         if self._confirm_file_save(len(files)):
             if not get_config().setting['enable_tag_saving']:
@@ -1667,7 +1662,6 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
         def callback(fingerprinting_system):
             if fingerprinting_system:
                 self.tagger.analyze(self.selected_objects)
-                self.tutorial.show('scan')
 
         self._ensure_fingerprinting_configured(callback)
 
@@ -1838,7 +1832,6 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
         ):
             self.panel.select_object(self.tagger.clusters)
         self._update_actions()
-        self.tutorial.show('cluster')
 
     def refresh(self):
         self.tagger.refresh(self.selected_objects)
@@ -2030,11 +2023,6 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
         # Metadata tip only for right pane items (album/track), so it shows
         # after files have been matched. Cover art shows on a later selection
         # if the metadata tip was already seen.
-        if new_selection and objects:
-            has_album_data = any(isinstance(o, (Album, Track)) for o in objects)
-            if metadata_visible and has_album_data and not self.tutorial.show('metadata'):
-                if coverart_visible and obj:
-                    self.tutorial.show('cover_art')
 
         self.selection_updated.emit(objects)
         self._update_script_editor_example_files()
@@ -2159,7 +2147,6 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
 
     def autotag(self):
         self.tagger.autotag(self.selected_objects)
-        self.tutorial.show('lookup')
 
     def copy_files(self, objects):
         mimeData = QtCore.QMimeData()
@@ -2496,7 +2483,6 @@ class MainWindow(QtWidgets.QMainWindow, PreserveGeometry):
         config = get_config()
         self.show_new_user_dialog(config)
         self.show_setup_wizard()
-        self.tutorial.show('overview')
 
     def show_setup_wizard(self, force=False) -> None:
         if SetupWizard.should_show() or force:

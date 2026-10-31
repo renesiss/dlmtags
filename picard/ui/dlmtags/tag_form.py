@@ -20,7 +20,6 @@ from picard.i18n import gettext as _
 from picard.smartscan import (
     REASON_LABELS,
     Outcome,
-    preselected_recording,
     release_year,
 )
 from picard.tags import display_tag_name
@@ -268,15 +267,8 @@ class TagEditor(QtWidgets.QScrollArea):
         file = self._confirmable_file()
         if file is None or not self.commit_pending():
             return
-        # One eligible recording: confirm it directly through the same
-        # File.confirm_recording(); several need the selection dialog.
-        recording_id = preselected_recording(file.confirmable_recordings())
-        if recording_id:
-            if file.confirm_recording(file.smart_scan_decision, recording_id):
-                self.box.update()
-            else:
-                self.confirm_message.setText(_('The song changed. Scan it again.'))
-            return
+        # Every confirmation uses the same four-field review, including a
+        # single plausible recording that the dialog preselects.
         dialog = self._confirm_dialog = ConfirmResultsDialog(file, self)
         dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
         dialog.finished.connect(self._confirm_finished)

@@ -3,8 +3,8 @@ requires = ["setuptools>=77.0.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "picard"
-description = "Picard is a cross-platform music tagger powered by the MusicBrainz database"
+name = "dlmtags"
+description = "DLMtags music tagger"
 authors = [{name = "The MusicBrainz Team"}]
 license = "GPL-2.0-or-later"
 keywords = ["musicbrainz", "tagging", "audio"]
@@ -57,7 +57,7 @@ Changelog = "https://picard.musicbrainz.org/changelog/"
 Funding = "https://metabrainz.org/donate"
 
 [project.scripts]
-picard-cli = "picard.cli:main"
+dlmtags-cli = "picard.cli:main"
 
 [project.optional-dependencies]
 plugins = [
@@ -94,7 +94,7 @@ readme = {file = ["README.md"], content-type = "text/markdown"}
 include = ["picard*"]
 
 [tool.setuptools.package-data]
-"*" = ["*.mo"]
+"*" = ["*.mo", "*.svg", "*.png"]
 
 [tool.ruff]
 src=["picard"]

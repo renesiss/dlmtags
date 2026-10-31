@@ -167,8 +167,6 @@ BoolOption('persist', 'show_hidden_files', False)
 BoolOption('persist', 'show_plugin_install_warning', True)
 TextOption('persist', 'tags_from_filenames_format', '')
 Option('persist', 'tracksearchdialog_header_state', QtCore.QByteArray())
-BoolOption('persist', 'tutorial_disabled', False)
-ListOption('persist', 'tutorial_steps_shown', [])
 BoolOption('persist', 'view_cover_art', True)
 BoolOption('persist', 'view_file_browser', False)
 BoolOption('persist', 'view_filterbar', False)
@@ -337,7 +335,7 @@ IntOption(
     bounds=(1, 9999),
 )
 ListOption('setting', 'custom_columns', [])
-BoolOption('setting', 'delete_empty_dirs', True, title=N_("Delete empty directories"), in_profile=True)
+BoolOption('setting', 'delete_empty_dirs', False, title=N_("Delete empty directories"), in_profile=True)
 ListOption(
     'setting',
     'disable_date_sanitization_formats',

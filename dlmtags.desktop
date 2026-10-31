@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=DLMtags
+Comment=Tag your music files
+Exec=dlmtags %F
+Icon=dlmtags-icon
+Terminal=false
+Categories=AudioVideo;Audio;Music;
+StartupNotify=true
+StartupWMClass=DLMtags

@@ -117,8 +117,8 @@ from picard.smartscan import (
     confirmable_recordings,
     confirmed_decision,
     decide as decide_smart_scan,
+    decide_year,
     file_hints,
-    first_release_date,
     metadata_lookup_useful,
     normalize_release_date,
     protected_snapshot,
@@ -137,7 +137,6 @@ from picard.tagsearch import TagSearchRequest
 from picard.util import (
     any_exception_isinstance,
     bytes2human,
-    emptydir,
     format_time,
     is_absolute_path,
     normpath,
@@ -339,6 +338,7 @@ class File(MetadataItem):
         # Unverified Artist/Title when Smart Scan could not verify the
         # recording (picard.smartscan.TagSuggestion). Shown, never applied.
         self.dlmtags_tag_suggestions = {}
+        self._confirmed_genre_values: tuple[str, ...] = ()
         self._credit_lookup_token = None
         self._credit_lookup_task = None
         # MusicBrainz recordings fetched for their artist credit, by MBID.
@@ -758,6 +758,20 @@ class File(MetadataItem):
         if self.tagger.stopping:
             log.debug("File not saved because %s is stopping: %r", PICARD_APP_NAME, self.filename)
             return None
+        unsafe = [
+            name
+            for name in (
+                'clear_existing_tags',
+                'remove_images_from_tags',
+                'remove_ape_from_aac',
+                'remove_ape_from_ac3',
+                'remove_wave_riff_info',
+                'enable_tagger_scripts',
+            )
+            if config.setting[name]
+        ]
+        if unsafe:
+            raise ValueError('DLMtags cannot save while hidden destructive settings are enabled: ' + ', '.join(unsafe))
         new_filename = old_filename
         if config.setting['enable_tag_saving']:
             # Detect source changes before saving (debug only)
@@ -779,29 +793,8 @@ class File(MetadataItem):
                     log.warning(why)
             else:
                 self._retry_on_permission_error(save)
-        # Rename files
-        if config.setting['rename_files'] or config.setting['move_files']:
-            new_filename = self._rename(old_filename, metadata, config.setting)
-        # Move extra files (images, playlists, etc.)
-        self._move_additional_files(old_filename, new_filename, config)
-        # Delete empty directories
-        if config.setting['delete_empty_dirs']:
-            dirname = os.path.dirname(old_filename)
-            try:
-                emptydir.rm_empty_dir(dirname)
-                head, tail = os.path.split(dirname)
-                if not tail:
-                    head, tail = os.path.split(head)
-                while head and tail:
-                    emptydir.rm_empty_dir(head)
-                    head, tail = os.path.split(head)
-            except OSError as why:
-                log.warning("Error removing directory: %s", why)
-            except emptydir.SkipRemoveDir as why:
-                log.debug("Not removing empty directory: %s", why)
-        # Save cover art images
-        if config.setting['save_images_to_files']:
-            self._save_images(os.path.dirname(new_filename), metadata)
+        # DLMtags saves in place. Hidden Picard file organization settings must
+        # never control filesystem operations at the execution boundary.
         return new_filename
 
     def _expected_embedded_images(self) -> 'ImageList':
@@ -1537,7 +1530,7 @@ class File(MetadataItem):
             limit=config.setting['query_limit'],
         )
 
-    def _finish_smart_scan(self, decision):
+    def _finish_smart_scan(self, decision, *, approved_identity_tags=None):
         self._smart_scan_token = None
         self.smart_scan_stage = None
         self._smart_scan_acoustid_decision = None
@@ -1571,7 +1564,7 @@ class File(MetadataItem):
             self._smart_genre_recording_id = decision.recording_id
             self._smart_genre_applying = True
             try:
-                self._apply_smart_scan_match(decision)
+                self._apply_smart_scan_match(decision, approved_identity_tags=approved_identity_tags)
             finally:
                 self._smart_genre_applying = False
             self._start_smart_genre(decision)
@@ -1625,10 +1618,14 @@ class File(MetadataItem):
         self._remember_manual_changes()
         return [tag for tag in ('artist', 'title') if tag in self._manually_edited_tags]
 
-    def confirm_recording(self, decision, recording_id, *, replace_manual=False):
+    def confirm_recording(self, decision, recording_id, *, replace_manual=False, approved_identity_tags=None):
         """Confirm a recording of this file's current review; False if stale."""
+        approved_identity_tags = frozenset(
+            {'artist', 'title'} if approved_identity_tags is None else approved_identity_tags
+        )
         if (
-            decision is not self.smart_scan_decision
+            not approved_identity_tags <= {'artist', 'title'}
+            or decision is not self.smart_scan_decision
             or self._smart_scan_token is not None
             or self._smart_scan_expected is None
             or self.state in {File.State.PENDING, File.State.REMOVED}
@@ -1648,18 +1645,67 @@ class File(MetadataItem):
         self._remember_manual_changes()
         if replace_manual:
             # Approved by the user: Artist/Title are no longer manual edits.
-            for tag in ('artist', 'title'):
+            for tag in approved_identity_tags:
                 self._manually_edited_tags.discard(tag)
                 self._smart_scan_expected[tag] = self.metadata.getall(tag)
         self.dlmtags_tag_suggestions = {}
         self.dlmtags_date_suggestion = None
-        self._finish_smart_scan(confirmed)
+        self._confirmed_genre_values = ()
+        self._finish_smart_scan(confirmed, approved_identity_tags=approved_identity_tags)
+        return True
+
+    def apply_confirmed_suggestions(self, decision, approved_tags, expected_values):
+        """Stage only reviewed Year/Genre from the current confirmed recording."""
+        approved_tags = frozenset(approved_tags)
+        if (
+            not approved_tags <= {'date', 'genre'}
+            or decision is not self.smart_scan_decision
+            or not decision.user_confirmed
+            or self.state in {File.State.PENDING, File.State.REMOVED}
+            or any(tuple(self.metadata.getall(tag)) != tuple(expected_values.get(tag, ())) for tag in approved_tags)
+        ):
+            return False
+        changes = {}
+        recording_id = decision.recording_id
+        if 'date' in approved_tags:
+            choice = decide_year(
+                decision.match.track,
+                self.metadata.getall('date'),
+                deleted='date' in self.metadata.deleted_tags,
+            )
+            value = choice.automatic or choice.suggestion
+            if not value:
+                return False
+            changes['date'] = [value]
+        if 'genre' in approved_tags:
+            suggestion = self.dlmtags_tag_suggestions.get('genre')
+            values = self._confirmed_genre_values
+            if (
+                suggestion is None
+                or suggestion.recording_id != recording_id
+                or not values
+                or not all(isinstance(value, str) and value.strip() for value in values)
+                or tuple(self.metadata.getall('genre')) != suggestion.values_then
+            ):
+                return False
+            changes['genre'] = list(values)
+        for tag, values in changes.items():
+            self.metadata[tag] = values
+            source = 'MusicBrainz' if tag == 'date' else self.dlmtags_tag_suggestions[tag].provenance
+            set_source(self, tag, source, 'https://musicbrainz.org/recording/' + recording_id if tag == 'date' else '')
+            self.dlmtags_tag_suggestions.pop(tag, None)
+        if 'date' in changes:
+            self.dlmtags_date_suggestion = None
+        if changes:
+            self._smart_scan_expected = Metadata(self.metadata)
+            self.update()
         return True
 
     def _suggest_confirmed_date(self, track):
         """The first-release Year of a user-confirmed recording, as a suggestion."""
         self._smart_scan_date = None
-        first = first_release_date(track)
+        decision = decide_year(track, self.metadata.getall('date'), deleted='date' in self.metadata.deleted_tags)
+        first = decision.automatic or decision.suggestion
         if not first or 'date' in self.metadata.deleted_tags or 'date' in self._manually_edited_tags:
             return
         current = [value for value in self.metadata.getall('date') if value.strip()]
@@ -1671,14 +1717,14 @@ class File(MetadataItem):
                 tuple(self.metadata.getall('date')),
                 recording_id=track['id'],
             )
-        elif first[:4] != current[0][:4]:
+        elif decision.suggestion:
             self.dlmtags_date_suggestion = (first, 'MusicBrainz', url)
 
     def _genre_suggested(self, decision, request, values, source, status):
         if self.smart_scan_decision is not decision or self.state == File.State.REMOVED or not values:
             return
-        styles = request.styles if source.startswith('Discogs') else []
-        for tag, tag_values in (('genre', values), ('style', styles)):
+        self._confirmed_genre_values = tuple(values)
+        for tag, tag_values in (('genre', values),):
             current = self.metadata.getall(tag)
             if (
                 tag_values
@@ -1778,15 +1824,32 @@ class File(MetadataItem):
         self._smart_genre_request = request
         request.start()
 
-    def _apply_smart_scan_match(self, decision):
+    def _apply_smart_scan_match(self, decision, *, approved_identity_tags=None):
         track = decision.match.track
         recording_id = track['id']
-        self._smart_scan_unverified_recording_id = None if decision.release_verified else recording_id
         if decision.user_confirmed:
-            first_release = None
+            # Confirm Results must not route a chosen recording through Picard's
+            # album / metadata application pipeline. That can add unrelated
+            # tags and artwork even when the dialog shows only four fields.
+            self._smart_scan_unverified_recording_id = None
+            self._smart_scan_protected = None
+            self._smart_scan_images = None
             self._suggest_confirmed_date(track)
-        else:
-            first_release = self._plan_smart_scan_date(track)
+            suggested = Metadata()
+            recording_to_metadata(track, suggested)
+            approved = {'artist', 'title'} if approved_identity_tags is None else approved_identity_tags
+            for tag in ('artist', 'title'):
+                if tag not in approved:
+                    continue
+                values = suggested.getall(tag)
+                if values and tag not in self._manually_edited_tags and tag not in self.metadata.deleted_tags:
+                    self.metadata[tag] = values
+                    set_source(self, tag, 'MusicBrainz', 'https://musicbrainz.org/recording/' + recording_id)
+            self._smart_scan_expected = Metadata(self.metadata)
+            self.update()
+            return
+        self._smart_scan_unverified_recording_id = None if decision.release_verified else recording_id
+        first_release = self._plan_smart_scan_date(track)
         if self._smart_scan_expected is not None:
             # The recording is confirmed even if no release can be verified.
             suggestions = Metadata()
@@ -1828,21 +1891,22 @@ class File(MetadataItem):
         an empty one takes the recording's first release; a user deletion stays.
         """
         recording_id = track['id']
-        first = first_release_date(track)
+        decision = decide_year(track, self.metadata.getall('date'), deleted='date' in self.metadata.deleted_tags)
+        first = decision.automatic or decision.suggestion
         current = [value for value in self.metadata.getall('date') if value.strip()]
         self.dlmtags_date_suggestion = None
         if 'date' in self.metadata.deleted_tags:
             self._smart_scan_date = None
         elif current:
             self._smart_scan_date = (recording_id, current)
-            if first and first[:4] != current[0][:4]:
+            if decision.suggestion:
                 self.dlmtags_date_suggestion = (
                     first,
                     'MusicBrainz',
                     'https://musicbrainz.org/recording/' + recording_id,
                 )
         else:
-            self._smart_scan_date = (recording_id, [first] if first else [])
+            self._smart_scan_date = (recording_id, [decision.automatic] if decision.automatic else [])
         return first
 
     def _log_smart_scan_decision(self, decision, final=False):

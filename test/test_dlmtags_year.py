@@ -21,6 +21,7 @@ from picard.file import File
 from picard.metadata import Metadata
 from picard.smartscan import (
     Outcome,
+    decide_year,
     first_release_date,
 )
 from picard.tagprovenance import source_for
@@ -33,7 +34,18 @@ from picard.ui.dlmtags.tag_form import TagEditor
 
 
 class YearTest(InlineTestCase):
-    def scan_with(self, first_release=None, releases=(release('rel', 'Album', '1999'),)):
+    def test_shared_year_policy_preserves_uncertain_and_invalid_existing_years(self):
+        track = {'first-release-date': '2001-05-02'}
+        self.assertEqual(decide_year(track, []).automatic, '2001-05-02')
+        self.assertEqual(decide_year(track, ['1999']).suggestion, '2001-05-02')
+        self.assertEqual(decide_year(track, ['circa 1999']).automatic, '')
+        self.assertEqual(decide_year(track, ['circa 1999']).suggestion, '')
+        self.assertEqual(decide_year(track, [], deleted=True).automatic, '')
+        self.assertEqual(decide_year({}, []).automatic, '')
+
+    def scan_with(self, first_release=None, releases=None):
+        if releases is None:
+            releases = (release('rel', 'Album', '1999'),)
         track = acoustid_recording('rec', 'Song', 'Artist', 232000, 0.95, list(releases))
         if first_release is not None:
             track['first-release-date'] = first_release
@@ -85,13 +97,28 @@ class YearTest(InlineTestCase):
         self.assertTrue(editor._source_labels['date'].isHidden())
 
     def test_compilations_and_unverified_album_never_set_the_year(self):
-        self.assertEqual('', first_release_date({'releases': [
-            release('hits', 'Greatest Hits', '1990', secondary=['Compilation']),
-        ]}))
-        self.assertEqual('2001-05', first_release_date({'releases': [
-            release('hits', 'Greatest Hits', '1990', secondary=['Compilation']),
-            release('later', 'Album', '2003'), release('first', 'Single', '2001-05', primary='Single'),
-        ]}))
+        self.assertEqual(
+            '',
+            first_release_date(
+                {
+                    'releases': [
+                        release('hits', 'Greatest Hits', '1990', secondary=['Compilation']),
+                    ]
+                }
+            ),
+        )
+        self.assertEqual(
+            '2001-05',
+            first_release_date(
+                {
+                    'releases': [
+                        release('hits', 'Greatest Hits', '1990', secondary=['Compilation']),
+                        release('later', 'Album', '2003'),
+                        release('first', 'Single', '2001-05', primary='Single'),
+                    ]
+                }
+            ),
+        )
         self.scan_with(releases=(release('hits', 'Greatest Hits', '1990', secondary=['Compilation']),))
         self.assertEqual('', self.file.metadata['date'])
         # An unverified album suggestion with its own date changes nothing.
@@ -102,16 +129,26 @@ class YearTest(InlineTestCase):
     def test_verified_compilation_release_does_not_replace_the_first_release_year(self):
         self.scan_with('2021-04-09')
         # The album pipeline copies a verified (compilation) release's metadata.
-        self.file.copy_metadata(Metadata(
-            title='Song', musicbrainz_recordingid='rec', date='2030-01-01', album='Greatest Hits',
-        ))
+        self.file.copy_metadata(
+            Metadata(
+                title='Song',
+                musicbrainz_recordingid='rec',
+                date='2030-01-01',
+                album='Greatest Hits',
+            )
+        )
         self.assertEqual(['2021-04-09'], self.file.metadata.getall('date'))
 
     def test_loaded_release_supplies_the_recording_first_release_when_unknown(self):
         self.scan_with(releases=())
-        self.file.copy_metadata(Metadata(
-            title='Song', musicbrainz_recordingid='rec', date='2030', **{'~recording_firstreleasedate': '2019-02-01'},
-        ))
+        self.file.copy_metadata(
+            Metadata(
+                title='Song',
+                musicbrainz_recordingid='rec',
+                date='2030',
+                **{'~recording_firstreleasedate': '2019-02-01'},
+            )
+        )
         self.assertEqual(['2019-02-01'], self.file.metadata.getall('date'))
         self.assertEqual('MusicBrainz', source_for(self.file, 'date'))
 
@@ -119,8 +156,9 @@ class YearTest(InlineTestCase):
         self.file.metadata['date'] = '2015'
         self.scan_with('2021-04-09')
         self.assertEqual(['2015'], self.file.metadata.getall('date'))
-        self.assertEqual(('2021-04-09', 'MusicBrainz', 'https://musicbrainz.org/recording/rec'),
-                         self.file.dlmtags_date_suggestion)
+        self.assertEqual(
+            ('2021-04-09', 'MusicBrainz', 'https://musicbrainz.org/recording/rec'), self.file.dlmtags_date_suggestion
+        )
         editor = self.editor()
         self.assertEqual('2015', editor._rows['date'][2].text())
         label = editor._source_labels['date']

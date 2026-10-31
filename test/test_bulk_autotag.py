@@ -66,22 +66,39 @@ class BulkAutoTagTest(unittest.TestCase):
         self.assertEqual(proposal.changes['artist'], ([], ['Verified artist']))
         self.assertNotIn('album', proposal.changes)
         self.assertNotIn('comment', proposal.changes)
-        self.assertEqual(proposal.changes['genre'], (['Keep genre'], ['Wrong genre']))
+        self.assertNotIn('genre', proposal.changes)
         self.assertNotIn('date', proposal.changes)
         self.assertNotIn('tracknumber', proposal.changes)
 
-    def test_year_requires_verified_release(self):
+    def test_recording_first_release_wins_over_verified_reissue(self):
         original = Metadata()
         original['date'] = '1999'
         decision = self.decision()
         decision.release = {'id': 'release-id', 'date': '2001-05-02'}
         decision.release_verified = True
-        with (
-            patch('picard.bulk_autotag.recording_to_metadata'),
-            patch('picard.bulk_autotag.release_to_metadata'),
-        ):
+        decision.match.track['first-release-date'] = '1980-06-01'
+        with patch('picard.bulk_autotag.recording_to_metadata'):
             proposal = propose(original, decision)
-        self.assertEqual(proposal.changes['date'], (['1999'], ['2001']))
+        self.assertEqual(proposal.changes['date'], (['1999'], ['1980-06-01']))
+
+    def test_missing_year_uses_original_recording_year(self):
+        original = Metadata()
+        decision = self.decision()
+        decision.match.track['first-release-date'] = '1980-06-01'
+        decision.release = {'id': 'reissue', 'date': '2020'}
+        decision.release_verified = True
+        with patch('picard.bulk_autotag.recording_to_metadata'):
+            proposal = propose(original, decision)
+        self.assertEqual(proposal.changes['date'], ([], ['1980-06-01']))
+
+    def test_compilation_without_recording_first_date_does_not_supply_year(self):
+        original = Metadata()
+        decision = self.decision()
+        decision.release = {'id': 'hits', 'date': '2020', 'release-group': {'secondary-types': ['Compilation']}}
+        decision.release_verified = True
+        with patch('picard.bulk_autotag.recording_to_metadata'):
+            proposal = propose(original, decision)
+        self.assertNotIn('date', proposal.changes)
 
     def test_missing_year_and_genre_keep_existing_values(self):
         original = Metadata()
@@ -92,22 +109,28 @@ class BulkAutoTagTest(unittest.TestCase):
         self.assertNotIn('date', proposal.changes)
         self.assertNotIn('genre', proposal.changes)
 
-    def test_genre_from_verified_release_is_available(self):
+    def test_existing_genre_is_preserved_even_with_lookup_result(self):
         original = Metadata()
         original['genre'] = 'Jazz'
         decision = self.decision()
         decision.release = {'id': 'release-id'}
         decision.release_verified = True
 
-        def release_genre(_release, metadata):
-            metadata['genre'] = 'Rock'
+        with patch('picard.bulk_autotag.recording_to_metadata'):
+            proposal = propose(original, decision, genre_values=['Rock'])
+        self.assertNotIn('genre', proposal.changes)
 
-        with (
-            patch('picard.bulk_autotag.recording_to_metadata'),
-            patch('picard.bulk_autotag.release_to_metadata', side_effect=release_genre),
-        ):
-            proposal = propose(original, decision)
-        self.assertEqual(proposal.changes['genre'], (['Jazz'], ['Rock']))
+    def test_missing_genre_uses_filtered_provider_result(self):
+        original = Metadata()
+        with patch('picard.bulk_autotag.recording_to_metadata'):
+            proposal = propose(original, self.decision(), genre_values=['Rock'])
+        self.assertEqual(proposal.changes['genre'], ([], ['Rock']))
+
+    def test_empty_provider_result_does_not_replace_genre(self):
+        original = Metadata()
+        with patch('picard.bulk_autotag.recording_to_metadata'):
+            proposal = propose(original, self.decision(), genre_values=[])
+        self.assertNotIn('genre', proposal.changes)
 
     def test_stale_preview_does_not_overwrite(self):
         original = Metadata()
@@ -137,6 +160,18 @@ class BulkAutoTagTest(unittest.TestCase):
         self.assertEqual(file.metadata['date'], '1999')
         self.assertEqual(file.metadata['tracknumber'], '7')
         file.update.assert_called_once_with()
+
+    def test_apply_rejects_unrelated_tag_injected_into_proposal(self):
+        original = Metadata(title='Before', album='Keep album')
+        file = SimpleNamespace(metadata=Metadata(original), update=Mock())
+        proposal = Proposal(
+            {'title': (['Before'], ['After']), 'album': (['Keep album'], ['Unexpected album'])},
+            1.0,
+        )
+        self.assertFalse(apply(file, proposal, original))
+        self.assertEqual(file.metadata['title'], 'Before')
+        self.assertEqual(file.metadata['album'], 'Keep album')
+        file.update.assert_not_called()
 
     def test_ambiguous_result_stages_nothing(self):
         original = Metadata()

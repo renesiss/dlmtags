@@ -78,7 +78,7 @@ from picard.env import parse_bool_env  # noqa: E402
 if sys.version_info < (3, 10):  # noqa: UP036
     sys.exit("ERROR: You need Python 3.10 or higher to use Picard.")
 
-PACKAGE_NAME = "picard"
+PACKAGE_NAME = "dlmtags"
 APPDATA_FILE = PICARD_APP_ID + '.appdata.xml'
 APPDATA_FILE_TEMPLATE = APPDATA_FILE + '.in'
 DESKTOP_FILE = PICARD_APP_ID + '.desktop'
@@ -185,9 +185,6 @@ class picard_build(build):
             )
 
             self.run_command('build_appxmanifest')
-        elif sys.platform not in {'darwin', 'haiku', 'win32'}:
-            self.run_command('build_appdata')
-            self.run_command('build_desktop_file')
         super().run()
 
     def _metadata(self):
@@ -749,20 +746,12 @@ def make_executable(filename):
 
 
 if sys.platform not in {'darwin', 'haiku', 'win32'}:
-    args['data_files'].append(('share/applications', [PICARD_DESKTOP_NAME]))
-    args['data_files'].append(('share/icons/hicolor/scalable/apps', ['resources/%s.svg' % PICARD_APP_ID]))
-    for size in (16, 24, 32, 48, 128, 256):
-        args['data_files'].append(
-            (
-                'share/icons/hicolor/{size}x{size}/apps'.format(size=size),
-                ['resources/images/{size}x{size}/{app_id}.png'.format(size=size, app_id=PICARD_APP_ID)],
-            )
-        )
-    args['data_files'].append(('share/metainfo', [APPDATA_FILE]))
+    args['data_files'].append(('share/applications', ['dlmtags.desktop']))
+    args['data_files'].append(('share/icons/hicolor/512x512/apps', ['resources/images/dlmtags-icon.png']))
 
 if sys.platform == 'win32':
     args['entry_points'] = {
-        'gui_scripts': ['picard = picard.tagger:main'],
+        'gui_scripts': ['dlmtags = picard.tagger:main'],
     }
 
 setup(**args)

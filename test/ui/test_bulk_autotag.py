@@ -26,6 +26,7 @@ from picard.smartscan import (
     Decision,
     Outcome,
     Reason,
+    TagSuggestion,
 )
 from picard.track import Track
 from picard.util import iter_files_from_objects
@@ -180,7 +181,7 @@ def test_ambiguous_cannot_be_confirmed_and_uses_manual_review(qapp, monkeypatch)
     assert result.state == 'reviewed'
 
 
-def test_manual_review_limits_followup_suggestions_to_bulk_tags(qapp):
+def test_manual_review_approves_only_bulk_tags(qapp):
     recording = SimpleNamespace(
         recording_id='recording-id',
         artist='Artist',
@@ -190,32 +191,39 @@ def test_manual_review_limits_followup_suggestions_to_bulk_tags(qapp):
         plausible=True,
     )
     decision = SimpleNamespace(candidates=(), reasons=())
+    confirmed = SimpleNamespace(recording_id='recording-id')
     file = SimpleNamespace(
         smart_scan_decision=decision,
+        metadata=Metadata(),
         confirmable_recordings=lambda: [recording],
         manual_identity_edits=lambda: [],
         dlmtags_tag_suggestions={},
         dlmtags_date_suggestion=None,
+        smart_genre_pending=False,
+        apply_confirmed_suggestions=Mock(return_value=True),
     )
-    date_suggestion = ('2001', 'MusicBrainz', 'https://musicbrainz.org/recording/recording-id')
 
     def confirm_recording(*_args, **_kwargs):
+        file.smart_scan_decision = confirmed
         file.dlmtags_tag_suggestions = {
             'album': object(),
             'style': object(),
-            'genre': object(),
-            'date': object(),
+            'genre': TagSuggestion('Pop', 'MusicBrainz', (), recording_id='recording-id'),
         }
-        file.dlmtags_date_suggestion = date_suggestion
         return True
 
     file.confirm_recording = Mock(side_effect=confirm_recording)
     dialog = ConfirmResultsDialog(file, allowed_tags=set(AUTO_TAGS))
     dialog.accept()
+    assert dialog.result() != QDialog.DialogCode.Accepted
+    assert dialog.approve_checks['genre'].isEnabled()
+    dialog.approve_checks['genre'].setChecked(True)
+    dialog.accept()
     assert dialog.result() == QDialog.DialogCode.Accepted
-    assert set(file.dlmtags_tag_suggestions) == {'genre', 'date'}
-    assert file.dlmtags_date_suggestion == date_suggestion
-    file.confirm_recording.assert_called_once_with(decision, 'recording-id', replace_manual=False)
+    file.apply_confirmed_suggestions.assert_called_once_with(confirmed, {'genre'}, {'genre': ()})
+    file.confirm_recording.assert_called_once_with(
+        decision, 'recording-id', replace_manual=False, approved_identity_tags={'artist', 'title'}
+    )
 
 
 def test_confirmation_buttons_are_icon_only_and_accessible(qapp):
@@ -286,6 +294,73 @@ def test_needs_review_card_has_visible_review_action(qapp, monkeypatch):
     QTest.mouseClick(dialog.preview.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=point)
     assert result.state == 'reviewed'
     opened.assert_called_once_with(file, dialog, allowed_tags={'title', 'artist', 'date', 'genre'})
+
+
+def test_bulk_result_waits_for_genre_and_handles_provider_failure(qapp, monkeypatch):
+    class ScannedFile(QtCore.QObject):
+        def __init__(self):
+            super().__init__()
+            self.filename = 'disposable.mp3'
+            self.metadata = Metadata()
+            self.cancel_smart_scan = Mock()
+            self.cancel_smart_genre = Mock()
+
+    class GenreRequest:
+        def __init__(self, file, decision, *, on_result):
+            self.on_result = on_result
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr('picard.ui.dlmtags.bulk_autotag.SmartGenreRequest', GenreRequest)
+    dialog = BulkAutoTagDialog(_window())
+    file = ScannedFile()
+    original = Metadata(file.metadata)
+    decision = _decision(0.9, Outcome.MATCHED)
+    dialog.active = file
+    dialog._finished(file, decision, original)
+    assert not dialog.results
+    file._smart_genre_request.on_result(['Rock'], 'MusicBrainz recording', 'ready')
+    assert dialog.results[-1].proposal.changes['genre'] == ([], ['Rock'])
+
+    second = ScannedFile()
+    dialog.active = second
+    dialog._finished(second, decision, Metadata(second.metadata))
+    assert len(dialog.results) == 1
+    second._smart_genre_request.on_result([], '', 'timeout')
+    assert len(dialog.results) == 2
+    assert 'genre' not in dialog.results[-1].proposal.changes
+
+
+def test_cancelling_pending_bulk_genre_ignores_late_reply(qapp, monkeypatch):
+    class ScannedFile(QtCore.QObject):
+        def __init__(self):
+            super().__init__()
+            self.filename = 'disposable.mp3'
+            self.metadata = Metadata()
+            self.cancel_smart_scan = Mock()
+            self.cancel_smart_genre = Mock()
+
+    class GenreRequest:
+        def __init__(self, file, decision, *, on_result):
+            self.on_result = on_result
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr('picard.ui.dlmtags.bulk_autotag.SmartGenreRequest', GenreRequest)
+    dialog = BulkAutoTagDialog(_window())
+    file = ScannedFile()
+    dialog.active = file
+    dialog._finished(file, _decision(0.9, Outcome.MATCHED), Metadata(file.metadata))
+    request = file._smart_genre_request
+    dialog.cancel_scan()
+    assert dialog.results[-1].status == 'skipped'
+    assert dialog.results[-1].state == 'pending'
+    file.cancel_smart_genre.assert_called_once()
+    request.on_result(['Rock'], 'MusicBrainz recording', 'ready')
+    assert len(dialog.results) == 1
+    assert file.metadata['genre'] == ''
 
 
 def test_cards_scroll_with_large_result_set(qapp):

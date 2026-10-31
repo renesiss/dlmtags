@@ -43,7 +43,7 @@ API_KEYS = (
 )
 DEFAULT_VISIBLE_TAGS = ('title', 'artist', 'date', 'genre')
 DLMTAGS_SETTINGS_PAGE_NAMES = frozenset(
-    {'dlmtags_general', 'dlmtags_api_keys', 'dlmtags_visible_tags', 'dlmtags_file_settings'}
+    {'dlmtags_general', 'dlmtags_api_keys', 'dlmtags_visible_tags', 'dlmtags_file_settings', 'dlmtags_about'}
 )
 VISIBLE_TAGS = tuple((tag, _(label)) for tag, label in PRIMARY_FIELDS if not tag.startswith('~'))
 FILE_SETTINGS = (
@@ -59,6 +59,7 @@ SETTINGS_NAV_ITEMS = (
     ('dlmtags_api_keys', N_('API Keys'), 'api-keys.svg'),
     ('dlmtags_visible_tags', N_('Visible Tags'), 'visible-tags.svg'),
     ('dlmtags_file_settings', N_('Files'), 'file-settings.svg'),
+    ('dlmtags_about', N_('About DLMtags'), 'about.svg'),
 )
 
 
@@ -172,6 +173,9 @@ class DLMtagsFileSettingsOptionsPage(OptionsPage):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
         layout = QtWidgets.QVBoxLayout(self)
+        notice = QtWidgets.QLabel(_('DLMtags edits tags in place. Saving does not rename, move, or reorganize files.'))
+        notice.setWordWrap(True)
+        layout.addWidget(notice)
         self.checks = {}
         for key, label in FILE_SETTINGS:
             check = QtWidgets.QCheckBox(label, self)
@@ -447,7 +451,68 @@ class VisibleTagsOptionsPage(OptionsPage):
             check.setChecked(tag in DEFAULT_VISIBLE_TAGS)
 
 
+
+class DLMtagsAboutOptionsPage(OptionsPage):
+    NAME = 'dlmtags_about'
+    TITLE = N_('About DLMtags')
+    PARENT = None
+    SORT_ORDER = 99
+    ACTIVE = True
+    OPTIONS: ClassVar[PageOptionConfigs] = {}
+
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+
+        from picard.util.versions import as_dict
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(12)
+
+        title = QtWidgets.QLabel('DLMtags', self)
+        font = title.font()
+        font.setPointSize(22)
+        font.setBold(True)
+        title.setFont(font)
+        layout.addWidget(title)
+
+        version = as_dict().get('version', 'Unknown')
+        layout.addWidget(
+            QtWidgets.QLabel(f'Version {version}', self)
+        )
+
+        details = QtWidgets.QTextBrowser(self)
+        details.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        details.setOpenExternalLinks(True)
+        details.setHtml("""
+            <h3>Project Maintainer</h3>
+            <p>Dionysis Renesis<br>
+            <a href="mailto:renesiss@gmail.com">
+            renesiss@gmail.com</a></p>
+
+            <h3>Project</h3>
+            <p><a href="https://github.com/renesiss/dlmtags">
+            DLMtags on GitHub</a></p>
+
+            <h3>License and Credits</h3>
+            <p>DLMtags is based on MusicBrainz Picard,
+            developed by the MetaBrainz Foundation
+            and its contributors.</p>
+
+            <p><a href="https://github.com/metabrainz/picard">
+            MusicBrainz Picard</a></p>
+
+            <p>GNU General Public License,
+            version 2 or later (GPL-2.0-or-later).</p>
+
+            <p>Original copyright and third-party
+            license notices remain applicable.</p>
+        """)
+        layout.addWidget(details)
+
 register_options_page(DLMtagsApiKeysOptionsPage)
 register_options_page(VisibleTagsOptionsPage)
 register_options_page(DLMtagsGeneralOptionsPage)
 register_options_page(DLMtagsFileSettingsOptionsPage)
+
+register_options_page(DLMtagsAboutOptionsPage)

@@ -2,14 +2,11 @@
 
 from dataclasses import dataclass
 
-from picard.mbjson import (
-    recording_to_metadata,
-    release_to_metadata,
-)
+from picard.mbjson import recording_to_metadata
 from picard.metadata import Metadata
 from picard.smartscan import (
     Outcome,
-    normalize_release_date,
+    decide_year,
 )
 
 
@@ -33,24 +30,18 @@ def classify(decision):
     return 'matched', decision.describe()
 
 
-def propose(metadata, decision):
+def propose(metadata, decision, *, genre_values=()):
     """Offer only supplied recording values and verified release details."""
     suggested = Metadata()
     recording_to_metadata(decision.match.track, suggested)
-    release = decision.release if decision.release_verified else None
-    year = None
-    if release:
-        release_metadata = Metadata()
-        release_to_metadata(release, release_metadata)
-        if not suggested.getall('genre'):
-            suggested['genre'] = release_metadata.getall('genre')
-        release_date = normalize_release_date(release.get('date'))
-        if len(release_date) >= 4 and release_date[:4].isdigit():
-            year = release_date[:4]
+    year = decide_year(decision.match.track, metadata.getall('date'), deleted='date' in metadata.deleted_tags)
     changes = {}
     for tag in AUTO_TAGS:
         if tag == 'date':
-            values = [year] if year else []
+            chosen = year.automatic or year.suggestion
+            values = [chosen] if chosen else []
+        elif tag == 'genre':
+            values = list(genre_values) if not any(value.strip() for value in metadata.getall('genre')) else []
         else:
             values = suggested.getall(tag)
         if not values or tag in metadata.deleted_tags:

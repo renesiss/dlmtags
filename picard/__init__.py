@@ -42,10 +42,10 @@ if TYPE_CHECKING:
     from picard.tagger import Tagger
 
 
-PICARD_ORG_NAME = "MusicBrainz"
-PICARD_APP_NAME = "Picard"
-PICARD_DISPLAY_NAME = "MusicBrainz Picard"
-PICARD_APP_ID = "org.musicbrainz.Picard"
+PICARD_ORG_NAME = "DLMtags"
+PICARD_APP_NAME = "DLMtags"
+PICARD_DISPLAY_NAME = "DLMtags"
+PICARD_APP_ID = "io.github.dlmtags.DLMtags"
 PICARD_DESKTOP_NAME = PICARD_APP_ID + ".desktop"
 PICARD_VERSION = Version(3, 0, 2, 'final', 0)
 COPYRIGHT_YEARS = "2004-2026"
@@ -150,7 +150,7 @@ def _show_crash_dialog(trace):
     # Write traceback to log file
     logfile = None
     try:
-        with NamedTemporaryFile(suffix='.log', prefix='picard-crash-', delete=False) as f:
+        with NamedTemporaryFile(suffix='.log', prefix='dlmtags-crash-', delete=False) as f:
             f.write(trace.encode(errors="replace"))
             logfile = f.name
     except:  # noqa: E722,F722 # pylint: disable=bare-except

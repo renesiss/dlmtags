@@ -33,11 +33,8 @@ from picard import (
     COPYRIGHT_YEARS,
     tagger_instance,
 )
-from picard.config import get_config
-from picard.const import PICARD_URLS
 from picard.i18n import gettext as _
 from picard.util import (
-    get_url,
     webbrowser2,
 )
 from picard.util.versions import (
@@ -62,6 +59,13 @@ class AboutDialog(PicardDialog, SingletonDialog):
         self.ui = Ui_AboutDialog()
         self.ui.setupUi(self)
         self.setWindowTitle(_('About DLMtags'))
+        self.ui.app_name.setText('DLMtags')
+        self.ui.logo.setPixmap(QtGui.QPixmap(':/images/dlmtags-icon.png'))
+        # DLMtags-specific About presentation
+        self.ui.donate_heading.hide()
+        self.ui.donate_text_label.hide()
+        self.ui.donate_button.hide()
+        self.ui.translator_credits.hide()
         self._apply_styling()
         self._update_content()
         theme.theme_changed.connect(self._apply_styling)
@@ -162,13 +166,8 @@ class AboutDialog(PicardDialog, SingletonDialog):
         self.ui.copyright_label.setText(copyright_text)
 
         # Translator credits
-        config = get_config()
-        ui_language = config.setting['ui_language']
-        if ui_language != 'en':
-            self.ui.translator_credits.setVisible(True)
-            self.ui.translate_button.clicked.connect(self._open_translate_url)
-        else:
-            self.ui.translator_credits.setVisible(False)
+        # Hide Picard's translation action in DLMtags.
+        self.ui.translator_credits.setVisible(False)
 
         # Icons credits (contains HTML links)
         icons_credits = _(
@@ -184,18 +183,32 @@ class AboutDialog(PicardDialog, SingletonDialog):
         self.ui.icons_credits_label.setText(icons_credits)
         self.ui.icons_credits_label.linkHovered.connect(self.ui.icons_credits_label.setToolTip)
 
-        # Links section
-        self.ui.website_heading.setText(_("Links"))
+        # DLMtags maintainer
+        self.ui.project_credit_label.setText(
+            '<b>DLMtags — Project Maintainer</b><br>'
+            'Dionysis Renesis<br>'
+            '<a href="mailto:renesiss@gmail.com">'
+            'renesiss@gmail.com</a><br>'
+            '<a href="https://github.com/renesiss/dlmtags">'
+            'GitHub — DLMtags</a><br><br>'
+            'Based on MusicBrainz Picard.'
+        )
+
+        # DLMtags project links and upstream attribution
+        self.ui.website_heading.setText(_("Project & License"))
         links = [
-            (PICARD_URLS['home'], _("Official website")),
-            (get_url('documentation_server'), _("Documentation")),
-            (PICARD_URLS['forum'], _("Community forum")),
-            (PICARD_URLS['license'], _("License")),
+            ("https://github.com/renesiss/dlmtags", "DLMtags GitHub"),
+            ("https://github.com/metabrainz/picard", "MusicBrainz Picard"),
+            ("https://www.gnu.org/licenses/old-licenses/gpl-2.0.html", "GPL License"),
         ]
-        links_html = " · ".join(f'<a href="{url}">{label}</a>' for url, label in links)
+        links_html = " · ".join(
+            f'<a href="{url}">{label}</a>' for url, label in links
+        )
         self.ui.website_link_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self.ui.website_link_label.setText(links_html)
-        self.ui.website_link_label.linkHovered.connect(self.ui.website_link_label.setToolTip)
+        self.ui.website_link_label.linkHovered.connect(
+            self.ui.website_link_label.setToolTip
+        )
 
     def _open_donate_url(self):
         webbrowser2.open('donate')

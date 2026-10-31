@@ -77,7 +77,7 @@ class TestListenBrainzAPIHelper(PicardTestCase):
         self.assertEqual(
             track.additional_info,
             {
-                'media_player': 'MusicBrainz Picard',
+                'media_player': 'DLMtags',
                 'media_player_version': PICARD_VERSION_STR,
                 'duration_ms': 300000,
                 'recording_mbid': '00000000-0000-0000-0000-000000000001',

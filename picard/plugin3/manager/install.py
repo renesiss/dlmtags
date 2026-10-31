@@ -147,7 +147,7 @@ class PluginInstaller:
         url_hash = hash_string(str(source_url))
 
         if is_local:
-            temp_path = Path(tempfile.gettempdir()) / f'picard-plugin-{url_hash}'
+            temp_path = Path(tempfile.gettempdir()) / f'dlmtags-plugin-{url_hash}'
         else:
             temp_path = self.manager._primary_plugin_dir / f'.tmp-plugin-{url_hash}'
             # Reuse temp dir if it's already a git repo, otherwise remove it
