@@ -774,9 +774,18 @@ class SmartScanFileTest(PicardTestCase):
         self.assertIn('millennium', self.releasegroup.loaded_albums)
         self.tagger.mb_api.find_tracks.assert_not_called()
         self.assertEqual(Outcome.MATCHED, self.file.smart_scan_decision.outcome)
-        self.assertEqual('aid-1', self.file.metadata['acoustid_id'])
+        self.assertEqual('', self.file.metadata['acoustid_id'])
         self.assertEqual(File.State.CHANGED, self.file.state)  # New Tags differ; nothing saved
         self.assertIsNone(self.file.smart_scan_stage)
+
+    def test_computed_fingerprint_is_used_for_matching_without_staging_a_tag(self):
+        callback = self.start()
+        self.file.set_acoustid_fingerprint('computed-fingerprint', 232)
+        self.assertEqual('computed-fingerprint', self.file.acoustid_fingerprint)
+        self.assertEqual('', self.file.metadata['acoustid_fingerprint'])
+        callback(self.good_acoustid(), None, None)
+        self.assertEqual(Outcome.MATCHED, self.file.smart_scan_decision.outcome)
+        self.assertEqual('', self.file.metadata['acoustid_fingerprint'])
 
     def test_dictionary_release_date_completes_scan_without_fallback(self):
         self.file.metadata['album'] = 'Millennium'  # Credible existing release.
@@ -804,6 +813,59 @@ class SmartScanFileTest(PicardTestCase):
         self.tagger.move_file_to_track.assert_called_once_with(self.file, 'millennium', 'rec')
         self.assertEqual(Source.METADATA, self.file.smart_scan_decision.source)
         self.tagger.mb_api.find_tracks.assert_called_once()
+
+    def test_automatic_sources_stage_only_primary_fields(self):
+        for source in (Source.ACOUSTID, Source.METADATA):
+            with self.subTest(source=source):
+                self.file = File('/music/Backstreet Boys - Larger Than Life.mp3')
+                self.file.state = File.State.NORMAL
+                tags = file_metadata(
+                    title='Larger Than Life',
+                    artist='Backstreet Boys',
+                    genre='Pop',
+                    date='1995',
+                    album='Millennium',
+                    comment='keep',
+                    mycustomtag='keep',
+                    tracknumber='7',
+                )
+                self.file.orig_metadata = Metadata(tags)
+                self.file.metadata = Metadata(tags)
+                del self.file.metadata['tracknumber']
+                before = Metadata(self.file.metadata)
+                callback = self.start()
+                if source == Source.METADATA:
+                    callback({'recordings': []}, None, None)
+                    callback = self.lookup_callback()
+                    candidate = recording('rec', 'Larger Than Life', 'Backstreet Boys', 232 * SECOND, BSB_RELEASES)
+                else:
+                    candidate = self.good_acoustid()['recordings'][0]
+                callback({'recordings': [candidate]}, None, None)
+                self.assertEqual(Outcome.MATCHED, self.file.smart_scan_decision.outcome)
+                changed = {
+                    tag
+                    for tag in set(before) | set(self.file.metadata)
+                    if not tag.startswith('~') and before.getall(tag) != self.file.metadata.getall(tag)
+                }
+                self.assertLessEqual(changed, {'title', 'artist', 'date', 'genre'})
+                self.assertEqual('keep', self.file.metadata['comment'])
+                self.assertEqual('keep', self.file.metadata['mycustomtag'])
+                self.assertEqual('1995', self.file.metadata['date'])
+                self.assertEqual('Pop', self.file.metadata['genre'])
+                self.assertEqual('', self.file.metadata['tracknumber'])
+
+    def test_new_scan_replaces_previous_recording_protection(self):
+        self.start()(self.good_acoustid(), None, None)
+        self.assertEqual('rec', self.file._smart_scan_recording_id)
+        second = acoustid_recording(
+            'second-recording', 'Larger Than Life', 'Backstreet Boys', 232 * SECOND, 0.95, BSB_RELEASES
+        )
+        self.start()({'recordings': [second]}, None, None)
+        self.assertEqual(Outcome.MATCHED, self.file.smart_scan_decision.outcome)
+        self.assertEqual('second-recording', self.file._smart_scan_recording_id)
+        identity = (self.file.metadata['artist'], self.file.metadata['title'])
+        self.file.copy_metadata(Metadata(artist='Stale artist', title='Stale title', musicbrainz_recordingid='rec'))
+        self.assertEqual(identity, (self.file.metadata['artist'], self.file.metadata['title']))
 
     def test_filename_hints_used_for_fallback_query(self):
         self.file = File('/music/Eloise - Pretty Little Baby.mp3')
@@ -1054,11 +1116,173 @@ class SmartScanProtectionTest(PicardTestCase):
         self.assertEqual('-6.5 dB', metadata['replaygain_track_gain'])
         self.assertEqual('USABC1234567', metadata['isrc'])
 
-    def test_12_musicbrainz_value_replaces_populated_tag(self):
+    def test_automatic_match_and_track_update_change_only_primary_tags(self):
+        self.set_config_values({'clear_existing_tags': False})
+        self.file.metadata['album'] = 'My album'
+        self.file.metadata['musicbrainz_recordingid'] = 'old-recording'
+        self.file.metadata['musicbrainz_albumid'] = 'old-release'
+        self.file.metadata['acoustid_id'] = 'old-acoustid'
+        self.file.orig_metadata = Metadata(self.file.metadata)
+        self.file.metadata.images.append(create_image(b'own', types=['front']))
+        self.file.orig_metadata.images = self.file.metadata.images.copy()
+        self.track.orig_metadata.update(
+            Metadata(album='Other album', musicbrainz_albumid='new-release', tracknumber='2')
+        )
+        self.track.metadata = Metadata(self.track.orig_metadata)
+        self.track.metadata.images.append(create_image(b'new', types=['front']))
+        before = Metadata(self.file.metadata)
+        images = self.file.metadata.images.copy()
+        self.file._smart_scan_expected = Metadata(self.file.metadata)
+
+        def recording_tags(_track, metadata):
+            metadata.update(
+                Metadata(
+                    title='New title',
+                    artist='New artist',
+                    album='Injected album',
+                    musicbrainz_recordingid='rec',
+                    acoustid_id='new-acoustid',
+                )
+            )
+
+        with patch('picard.file.recording_to_metadata', side_effect=recording_tags):
+            self.apply()
+        changed = {
+            tag
+            for tag in set(before) | set(self.file.metadata)
+            if not tag.startswith('~') and before.getall(tag) != self.file.metadata.getall(tag)
+        }
+        self.assertLessEqual(changed, {'title', 'artist', 'date', 'genre'})
+        self.assertEqual(images, self.file.metadata.images)
+
+    def test_later_track_update_with_different_recording_keeps_other_tags(self):
+        self.set_config_values({'clear_existing_tags': False})
+        self.file.metadata['album'] = 'My album'
+        self.file.metadata['musicbrainz_recordingid'] = 'old-recording'
+        self.file.orig_metadata = Metadata(self.file.metadata)
+        self.file._smart_scan_expected = Metadata(self.file.metadata)
+        before = Metadata(self.file.metadata)
+        self.apply()
+        matched_identity = (self.file.metadata['artist'], self.file.metadata['title'])
+        self.track.orig_metadata.update(
+            Metadata(
+                title='Other title',
+                artist='Other artist',
+                musicbrainz_recordingid='other-recording',
+                album='Other album',
+                musicbrainz_albumid='other-release',
+            )
+        )
+        self.track.metadata = Metadata(self.track.orig_metadata)
+        self.track.update_file_metadata(self.file)
+        changed = {
+            tag
+            for tag in set(before) | set(self.file.metadata)
+            if not tag.startswith('~') and before.getall(tag) != self.file.metadata.getall(tag)
+        }
+        self.assertLessEqual(changed, {'title', 'artist', 'date', 'genre'})
+        self.assertEqual('old-recording', self.file.metadata['musicbrainz_recordingid'])
+        self.assertEqual('My album', self.file.metadata['album'])
+        self.assertEqual(matched_identity, (self.file.metadata['artist'], self.file.metadata['title']))
+
+    def test_delayed_update_from_selected_recording_can_refine_identity(self):
+        self.apply()
+        self.track.orig_metadata['artist'] = 'Corrected artist'
+        self.track.orig_metadata['title'] = 'Corrected title'
+        self.track.metadata = Metadata(self.track.orig_metadata)
+        self.track.update_file_metadata(self.file)
+        self.assertEqual('Corrected artist', self.file.metadata['artist'])
+        self.assertEqual('Corrected title', self.file.metadata['title'])
+
+    def test_manual_identity_edits_survive_delayed_track_update(self):
+        self.file._smart_scan_expected = Metadata(self.file.metadata)
+        self.apply()
+        self.file.metadata['artist'] = 'Manual artist'
+        self.file.metadata['title'] = 'Manual title'
+        self.track.orig_metadata['artist'] = 'Other artist'
+        self.track.orig_metadata['title'] = 'Other title'
+        self.track.metadata = Metadata(self.track.orig_metadata)
+        self.track.update_file_metadata(self.file)
+        self.assertEqual('Manual artist', self.file.metadata['artist'])
+        self.assertEqual('Manual title', self.file.metadata['title'])
+
+    def test_explicit_track_reassociation_restores_picard_metadata_flow(self):
+        self.set_config_values({'clear_existing_tags': False})
+        self.apply()
+        self.file.parent_item = self.track
+        self.tagger._acoustid = MagicMock()
+        self.tagger.isrc_submit_manager = MagicMock()
+        other = Track('other-recording')
+        other.orig_metadata = Metadata(
+            artist='Other artist', title='Other title', musicbrainz_recordingid='other-recording'
+        )
+        other.metadata = Metadata(other.orig_metadata)
+        self.assertTrue(self.file.move(other))
+        self.assertFalse(self.file._smart_scan_primary_only)
+        self.assertIsNone(self.file._smart_scan_recording_id)
+        self.assertEqual('Other artist', self.file.metadata['artist'])
+        self.assertEqual('Other title', self.file.metadata['title'])
+        self.assertEqual('other-recording', self.file.metadata['musicbrainz_recordingid'])
+
+    def test_removal_and_reload_clear_match_protection(self):
+        self.apply()
+        self.tagger.isrc_submit_manager = MagicMock()
+        self.file.remove(from_parent_item=False)
+        self.assertFalse(self.file._smart_scan_primary_only)
+        self.assertIsNone(self.file._smart_scan_recording_id)
+        self.file._copy_loaded_metadata(Metadata(title='Reloaded title', artist='Reloaded artist'))
+        self.assertFalse(self.file._smart_scan_primary_only)
+        self.assertIsNone(self.file._smart_scan_recording_id)
+        self.assertEqual('Reloaded title', self.file.metadata['title'])
+
+    def test_reloading_existing_file_clears_match_protection(self):
+        self.apply()
+        self.file._smart_genre_recording_id = 'rec'
+        request = MagicMock(active=True)
+        self.file._smart_genre_request = request
+        self.file._copy_loaded_metadata(Metadata(title='Reloaded title', artist='Reloaded artist'))
+        self.assertFalse(self.file._smart_scan_primary_only)
+        self.assertIsNone(self.file._smart_scan_recording_id)
+        self.assertIsNone(self.file._smart_scan_expected)
+        self.assertIsNone(self.file._smart_genre_recording_id)
+        request.cancel.assert_called_once_with()
+        self.assertEqual('Reloaded title', self.file.metadata['title'])
+
+    def test_new_match_keeps_year_during_old_track_detachment(self):
+        self.set_config_values({'clear_existing_tags': False})
+        self.file.metadata['musicbrainz_recordingid'] = 'old-recording'
+        self.file.orig_metadata = Metadata(self.file.metadata)
+        self.apply()
+        self.file.parent_item = self.track
+        self.file.metadata.unset('date')
+        self.file.orig_metadata.unset('date')
+        self.file._smart_scan_expected = Metadata(self.file.metadata)
+        self.tagger._acoustid = MagicMock()
+        self.tagger.isrc_submit_manager = MagicMock()
+        other = Track('second-recording')
+        other.orig_metadata = Metadata(title='Song', artist='Artist', musicbrainz_recordingid='second-recording')
+        other.metadata = Metadata(other.orig_metadata)
+        self.tagger.move_file_to_nat.side_effect = lambda file, _recording_id: file.move(other)
+        decision = MagicMock()
+        decision.source = Source.METADATA
+        decision.match.track = {'id': 'second-recording', 'title': 'Song', 'first-release-date': '2001-01-02'}
+        decision.release = None
+        decision.release_verified = False
+        decision.user_confirmed = False
+        self.file._smart_genre_applying = True
+        try:
+            self.file._apply_smart_scan_match(decision)
+        finally:
+            self.file._smart_genre_applying = False
+        self.assertEqual('second-recording', self.file._smart_scan_recording_id)
+        self.assertEqual(('second-recording', ['2001-01-02']), self.file._smart_scan_date)
+        self.assertEqual('2001-01-02', self.file.metadata['date'])
+
+    def test_12_musicbrainz_value_does_not_replace_existing_genre(self):
         self.track.orig_metadata['genre'] = 'Dance'
         self.track.metadata = Metadata(self.track.orig_metadata)
         self.apply()
-        self.assertEqual(['Dance'], self.file.metadata.getall('genre'))
+        self.assertEqual(['Rock', 'Pop'], self.file.metadata.getall('genre'))
 
     def test_without_smart_scan_picard_behaviour_is_unchanged(self):
         self.track.add_file(self.file)
@@ -1074,6 +1298,8 @@ class SmartScanProtectionTest(PicardTestCase):
         self.apply()
         self.track.remove_file(self.file)
         self.assertIsNone(self.file._smart_scan_protected)
+        self.assertFalse(self.file._smart_scan_primary_only)
+        self.assertIsNone(self.file._smart_scan_recording_id)
         self.assertEqual(self.file.orig_metadata, self.file.metadata)
 
     def test_artwork_kept_for_unverified_release(self):
@@ -1085,14 +1311,15 @@ class SmartScanProtectionTest(PicardTestCase):
         self.apply(release_verified=False)
         self.assertEqual(own, self.file.metadata.images)
 
-    def test_artwork_from_verified_release_is_used(self):
+    def test_artwork_from_verified_release_does_not_replace_existing_artwork(self):
         self.file.metadata.images = ImageList()
         self.file.metadata.images.append(create_image(b'own', types=['front']))
+        own_images = self.file.metadata.images.copy()
         release_images = ImageList()
         release_images.append(create_image(b'release', types=['front']))
         self.track.metadata.images = release_images
         self.apply(release_verified=True)
-        self.assertEqual(release_images, self.file.metadata.images)
+        self.assertEqual(own_images, self.file.metadata.images)
 
     def test_orig_metadata_never_modified(self):
         orig = Metadata(self.file.orig_metadata)
@@ -2048,6 +2275,14 @@ class ConfirmResultsTest(SmartScanFileTestCase):
         self.assertFalse({'artist', 'title'} & set(self.suggested()))
         self.tagger.move_file_to_nat.assert_not_called()
         self.tagger.move_file_to_track.assert_not_called()
+
+    def test_confirmation_clears_previous_automatic_match_protection(self):
+        review = self.pink_review()
+        self.file._smart_scan_primary_only = True
+        self.file._smart_scan_recording_id = 'previous-recording'
+        self.assertTrue(self.file.confirm_recording(review, PINK_RECORDING))
+        self.assertFalse(self.file._smart_scan_primary_only)
+        self.assertIsNone(self.file._smart_scan_recording_id)
 
     def test_confirmed_four_field_review_applies_only_explicit_choices(self):
         review = self.pink_review()

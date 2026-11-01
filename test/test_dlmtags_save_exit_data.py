@@ -14,7 +14,11 @@ from unittest.mock import (
 
 import mutagen
 from mutagen.flac import Picture
-from mutagen.id3 import TXXX
+from mutagen.id3 import (
+    APIC,
+    TXXX,
+    UFID,
+)
 
 from PyQt6 import QtCore, QtWidgets
 
@@ -29,6 +33,7 @@ from picard.file import File
 from picard.formats.id3 import MP3File
 from picard.formats.registry import FormatRegistry
 from picard.formats.vorbis import FLACFile
+from picard.matching import SimMatchTrack
 from picard.metadata import Metadata
 from picard.smartscan import (
     CandidateSummary,
@@ -40,11 +45,12 @@ from picard.tagsearch import (
     Evidence,
     TagCandidate,
 )
+from picard.track import Track
 
 import pytest
 
-from picard.ui.dlmtags.exit_dialog import ExitConfirmationDialog
 from picard.ui.dlmtags.confirm_results import ConfirmResultsDialog
+from picard.ui.dlmtags.exit_dialog import ExitConfirmationDialog
 from picard.ui.dlmtags.find_tag import FindTagDialog
 from picard.ui.dlmtags.save_toast import SaveToastManager
 
@@ -163,6 +169,70 @@ class SaveExitAudioTest(PicardTestCase):
         self.assertEqual(saved['unrelated'], ['keep'])
         self.assertEqual([image.data for image in saved.pictures], [TINY_PNG])
 
+    def test_automatic_match_save_preserves_other_tags_and_artwork(self):
+        for name, file_type in (('test.mp3', MP3File), ('test.flac', FLACFile)):
+            with self.subTest(name=name):
+                path = self.copy_audio(name)
+                raw = mutagen.File(path)
+                if name.endswith('.mp3'):
+                    raw.tags.add(TXXX(encoding=3, desc='unrelated', text='keep'))
+                    raw.tags.add(UFID(owner='http://musicbrainz.org', data=b'old-recording'))
+                    raw.tags.add(APIC(encoding=3, mime='image/png', type=3, desc='Cover', data=TINY_PNG))
+                else:
+                    raw['unrelated'] = ['keep']
+                    raw['musicbrainz_trackid'] = ['old-recording']
+                    picture = Picture()
+                    picture.type = 3
+                    picture.mime = 'image/png'
+                    picture.data = TINY_PNG
+                    raw.add_picture(picture)
+                raw.save()
+                file = self.loaded_file(path, file_type)
+                before = Metadata(file.metadata)
+                images = before.images.copy()
+                file._smart_scan_expected = Metadata(file.metadata)
+                node = recording('new-recording', 'New title', 'New artist', 200000)
+                decision = Decision(
+                    Outcome.MATCHED,
+                    Source.ACOUSTID,
+                    match=SimMatchTrack(0.95, None, None, node),
+                    release_verified=True,
+                )
+                self.tagger.acoustidmanager = MagicMock()
+                self.tagger.move_file_to_nat = MagicMock()
+                file._apply_smart_scan_match(decision)
+                track = Track('new-recording')
+                track.orig_metadata = Metadata(
+                    title='New title',
+                    artist='New artist',
+                    album='Unexpected album',
+                    musicbrainz_recordingid='new-recording',
+                    musicbrainz_albumid='new-release',
+                    genre='Unexpected genre',
+                )
+                track.metadata = Metadata(track.orig_metadata)
+                track.add_file(file)
+                changed = {
+                    tag
+                    for tag in set(before) | set(file.metadata)
+                    if not tag.startswith('~') and before.getall(tag) != file.metadata.getall(tag)
+                }
+                self.assertLessEqual(changed, {'title', 'artist', 'date', 'genre'})
+                self.assertEqual(images, file.metadata.images)
+                self.assertEqual('old-recording', file.metadata['musicbrainz_recordingid'])
+                results = []
+                file.save_finished.connect(results.append)
+                file.save()
+                self.wait_for(lambda: bool(results))
+                self.assertEqual([True], results)
+                self.assertEqual(str(path), file.filename)
+                self.assertTrue(path.is_file())
+                saved = file_type(str(path))._load(str(path))
+                self.assertEqual('old-recording', saved['musicbrainz_recordingid'])
+                self.assertEqual('keep', saved['unrelated'])
+                self.assertEqual(images, saved.images)
+                self.assertEqual('New title', saved['title'])
+
     def test_find_tag_gui_approves_four_fields_then_save_and_exit(self):
         path = self.copy_audio('test.flac')
         raw = mutagen.File(path)
@@ -238,8 +308,17 @@ class SaveExitAudioTest(PicardTestCase):
         node = recording('reviewed-recording', 'Reviewed title', 'Reviewed artist', 200000)
         node['first-release-date'] = '2001-05-02'
         candidate = CandidateSummary(
-            Source.METADATA, 'reviewed-recording', 'Reviewed title', 'Reviewed artist',
-            200000, None, None, None, 0.9, None, node=node,
+            Source.METADATA,
+            'reviewed-recording',
+            'Reviewed title',
+            'Reviewed artist',
+            200000,
+            None,
+            None,
+            None,
+            0.9,
+            None,
+            node=node,
         )
         file.smart_scan_decision = Decision(Outcome.NEEDS_REVIEW, Source.METADATA, candidates=(candidate,))
         file._smart_scan_expected = Metadata(file.metadata)
@@ -257,13 +336,12 @@ class SaveExitAudioTest(PicardTestCase):
         self.assertEqual('1999', file.metadata['date'])
         self.assertEqual('', file.metadata['genre'])
         genre_calls = [
-            call for call in self.tagger.mb_api.get_track_by_id.call_args_list
+            call
+            for call in self.tagger.mb_api.get_track_by_id.call_args_list
             if {'genres', 'tags', 'user-genres', 'user-tags'} & set(call.kwargs.get('inc') or ())
         ]
         self.assertEqual(1, len(genre_calls))
-        genre_calls[0].args[1](
-            {'id': 'reviewed-recording', 'genres': [{'name': 'rock', 'count': 4}]}, None, None
-        )
+        genre_calls[0].args[1]({'id': 'reviewed-recording', 'genres': [{'name': 'rock', 'count': 4}]}, None, None)
         dialog._refresh_suggestions()
         self.assertEqual('Rock', dialog.proposed_labels['genre'].text())
         dialog.approve_checks['genre'].setChecked(True)

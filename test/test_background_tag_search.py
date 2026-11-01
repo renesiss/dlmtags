@@ -23,8 +23,6 @@ from test.test_smartscan import (
     release,
 )
 
-from picard.file import File
-from picard.metadata import Metadata
 from picard.config import (
     Option,
     get_config,
@@ -34,11 +32,13 @@ from picard.discogsgenre import (
     folded,
     same_text,
 )
+from picard.file import File
+from picard.metadata import Metadata
+from picard.smartscan import Outcome
 from picard.tagprovenance import (
     set_source,
     source_for,
 )
-from picard.smartscan import Outcome
 from picard.tagsearch import TagSearchRequest
 from picard.webservice import WebService
 
@@ -78,9 +78,9 @@ class BackgroundTagTest(PicardTestCase):
         set_source(self.file, 'genre', 'Last.fm')
         text = '\n'.join(MatchingResults._describe(MagicMock(), self.file))
         self.assertIn('Recognition: AcoustID + MusicBrainz', text)
-        self.assertIn('Additional metadata: Last.fm', text)
+        self.assertIn('Genre source: Last.fm', text)
         set_source(self.file, 'genre', 'Manual')
-        self.assertNotIn('Additional metadata:', '\n'.join(MatchingResults._describe(MagicMock(), self.file)))
+        self.assertNotIn('Genre source:', '\n'.join(MatchingResults._describe(MagicMock(), self.file)))
 
     def test_api_settings_reuse_options_and_mask_credentials(self):
         self.patch_tagger_instance('picard.ui.options')
@@ -103,7 +103,8 @@ class BackgroundTagTest(PicardTestCase):
         self.assertEqual('MusicBrainz', source_for(self.file, 'title'))
         self.assertEqual('MusicBrainz', source_for(self.file, 'artist'))
         self.assertNotEqual('AcoustID', source_for(self.file, 'title'))
-        self.assertEqual('AcoustID', source_for(self.file, 'acoustid_id'))
+        self.assertEqual('', source_for(self.file, 'acoustid_id'))
+        self.assertEqual('', self.file.metadata['acoustid_id'])
         self.file.metadata['title'] = 'My Title'
         set_source(self.file, 'title', 'Manual')
         self.file.copy_metadata(Metadata(title='Other', musicbrainz_recordingid='rec'))

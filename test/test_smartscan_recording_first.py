@@ -8,12 +8,13 @@ from unittest.mock import (
     patch,
 )
 
-from PyQt6 import QtGui
-
 from test import (
     test_smartgenre as genre_tests,
     test_smartscan as scan_tests,
 )
+
+from PyQt6 import QtGui
+
 from test.picardtestcase import (
     PicardTestCase,
     create_image,
@@ -32,7 +33,6 @@ from picard.file import (
     File,
 )
 from picard.metadata import Metadata
-from picard.util import tracknum_and_title_from_filename
 from picard.smartscan import (
     Outcome,
     Reason,
@@ -41,6 +41,7 @@ from picard.smartscan import (
     file_hints,
     split_title,
 )
+from picard.util import tracknum_and_title_from_filename
 
 from picard.ui.dlmtags.workspace import MatchingResults
 
@@ -353,12 +354,18 @@ class RecordingOnlyWorkflowTest(PicardTestCase):
         self.assertFalse(self.file.smart_scan_decision.release_verified)
         self.tagger.move_file_to_track.assert_not_called()
         self.tagger.move_file_to_nat.assert_called_once_with(self.file, 'rec')
-        self.file.copy_metadata(Metadata(
-            title='Confirmed Recording', artist='Artist', musicbrainz_recordingid='rec',
-            album='[non-album tracks]', date='2099', tracknumber='99',
-        ))
+        self.file.copy_metadata(
+            Metadata(
+                title='Confirmed Recording',
+                artist='Artist',
+                musicbrainz_recordingid='rec',
+                album='[non-album tracks]',
+                date='2099',
+                tracknumber='99',
+            )
+        )
         self.assertEqual('Confirmed Recording', self.file.metadata['title'])
-        self.assertEqual('rec', self.file.metadata['musicbrainz_recordingid'])
+        self.assertEqual('', self.file.metadata['musicbrainz_recordingid'])
         self.assertEqual('My Album', self.file.metadata['album'])
         self.assertEqual('1998', self.file.metadata['date'])
         self.assertEqual('7', self.file.metadata['tracknumber'])

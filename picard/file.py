@@ -315,11 +315,11 @@ class File(MetadataItem):
         # Last Smart Scan result (picard.smartscan.Decision), for review/UI.
         self.smart_scan_decision: Decision | None = None
         self._smart_scan_acoustid_decision: Decision | None = None
-        # Pre-match values that a Smart Scan match must not drop (see
-        # picard.smartscan.is_protected_tag), and artwork to keep when the
-        # release could not be verified. Only set for Smart Scan matches.
+        # Pre-match values and artwork kept through Smart Scan Track updates.
         self._smart_scan_protected: dict[str, list[str]] | None = None
         self._smart_scan_images: ImageList | None = None
+        self._smart_scan_primary_only = False
+        self._smart_scan_recording_id: str | None = None
         self._smart_scan_unverified_recording_id: str | None = None
         self._smart_scan_expected: Metadata | None = None
         self._manually_edited_tags: set[str] = set()
@@ -494,6 +494,14 @@ class File(MetadataItem):
         Filter.apply_filters()
 
     def _copy_loaded_metadata(self, metadata, postprocessors=None):
+        self.cancel_smart_genre()
+        self._smart_genre_recording_id = None
+        self._clear_smart_scan_match_protection()
+        self._smart_scan_expected = None
+        self._smart_scan_unverified_recording_id = None
+        self._smart_scan_date = None
+        self._manually_edited_tags.clear()
+        self.smart_scan_decision = None
         metadata['~length'] = format_time(metadata.length)
         if postprocessors:
             for processor in postprocessors:
@@ -512,11 +520,39 @@ class File(MetadataItem):
         for tag in file_info_tag_names():
             to_metadata[tag] = from_metadata[tag]
 
+    def _clear_smart_scan_match_protection(self):
+        self._smart_scan_primary_only = False
+        self._smart_scan_recording_id = None
+        self._smart_scan_protected = None
+        self._smart_scan_images = None
+
     def copy_metadata(self, metadata, preserve_deleted=True):
-        if metadata is self.orig_metadata and self._smart_genre_applying:
+        detaching_for_smart_scan = metadata is self.orig_metadata and self._smart_genre_applying
+        if detaching_for_smart_scan:
             # Detaching the old Track is part of applying the new match.
             # It must not roll back suggestions already shown in New Tags.
             metadata = Metadata(self.metadata)
+        if self._smart_scan_primary_only and metadata is not self.orig_metadata:
+            incoming_recording_id = metadata['musicbrainz_recordingid']
+            same_recording = incoming_recording_id == self._smart_scan_recording_id
+            if incoming_recording_id and not same_recording and not detaching_for_smart_scan:
+                # A different Track can arrive while an album is loading.
+                # It cancels recording-specific enrichment, but must not
+                # release the four-field protection during that association.
+                self._smart_scan_date = None
+                self.dlmtags_date_suggestion = None
+                self.cancel_smart_genre()
+                self._smart_genre_recording_id = None
+            # Track updates carry release tags, identifiers and artwork. Only
+            # this match's recording may refine Artist, Title or first release.
+            first_release = metadata.getall('~recording_firstreleasedate') if same_recording else []
+            primary = {tag: metadata.getall(tag) for tag in ('artist', 'title')} if same_recording else {}
+            metadata = Metadata(self.metadata)
+            for tag, values in primary.items():
+                if values:
+                    metadata[tag] = values
+            if first_release:
+                metadata['~recording_firstreleasedate'] = first_release
         reverting = metadata is self.orig_metadata
         manual_values = {}
         missing_values = {}
@@ -529,6 +565,7 @@ class File(MetadataItem):
                 if not tag.startswith('~') and not metadata.getall(tag)
             }
         elif reverting:
+            self._clear_smart_scan_match_protection()
             self._smart_scan_expected = None
             self._manually_edited_tags.clear()
             self.dlmtags_tag_sources.clear()
@@ -537,8 +574,13 @@ class File(MetadataItem):
             self.dlmtags_tag_urls.clear()
             self._smart_scan_date = None
             self.dlmtags_date_suggestion = None
-        if self._smart_scan_date is not None and (
-            metadata['musicbrainz_recordingid'] and metadata['musicbrainz_recordingid'] != self._smart_scan_date[0]
+        if (
+            not self._smart_scan_primary_only
+            and not self._smart_genre_applying
+            and self._smart_scan_date is not None
+            and (
+                metadata['musicbrainz_recordingid'] and metadata['musicbrainz_recordingid'] != self._smart_scan_date[0]
+            )
         ):
             # Another recording: its own date applies, not this match's year.
             self._smart_scan_date = None
@@ -597,12 +639,7 @@ class File(MetadataItem):
                 del self.metadata[tag]
         self.metadata.update(saved_metadata)
 
-        if metadata is self.orig_metadata and not self._smart_genre_applying:
-            # Reverting to the file's own tags (file left its track): the
-            # protection of a previous Smart Scan match no longer applies.
-            self._smart_scan_protected = None
-            self._smart_scan_images = None
-        else:
+        if metadata is not self.orig_metadata or self._smart_genre_applying:
             if self._smart_scan_protected:
                 restore_protected(self.metadata, self._smart_scan_protected)
             if self._smart_scan_images is not None:
@@ -1103,8 +1140,11 @@ class File(MetadataItem):
         self.tagger.acoustidmanager.remove(self)
         self.tagger.isrc_submit_manager.remove(self)
         self.cancel_smart_genre()
+        self._smart_genre_recording_id = None
         self.cancel_tag_searches()
         self.clear_lookup_task()
+        self._clear_smart_scan_match_protection()
+        self._smart_scan_expected = None
         self.state = File.State.REMOVED
 
     def move(self, to_parent_item):
@@ -1147,7 +1187,7 @@ class File(MetadataItem):
             self.tagger.acoustidmanager.add(self, None)
             self.acoustid_update()
         config = get_config()
-        if config.setting['save_acoustid_fingerprints']:
+        if config.setting['save_acoustid_fingerprints'] and self._smart_scan_token is None:
             self.metadata['acoustid_fingerprint'] = fingerprint
 
     def acoustid_update(self):
@@ -1832,8 +1872,7 @@ class File(MetadataItem):
             # album / metadata application pipeline. That can add unrelated
             # tags and artwork even when the dialog shows only four fields.
             self._smart_scan_unverified_recording_id = None
-            self._smart_scan_protected = None
-            self._smart_scan_images = None
+            self._clear_smart_scan_match_protection()
             self._suggest_confirmed_date(track)
             suggested = Metadata()
             recording_to_metadata(track, suggested)
@@ -1855,27 +1894,26 @@ class File(MetadataItem):
             suggestions = Metadata()
             recording_to_metadata(track, suggestions)
             proposed = Metadata(self.metadata)
-            proposed.update(suggestions)
+            for tag in ('artist', 'title'):
+                if suggestions.getall(tag):
+                    proposed[tag] = suggestions.getall(tag)
+            self._clear_smart_scan_match_protection()
             self.copy_metadata(proposed)
-            for tag, values in suggestions.rawitems():
+            for tag in ('artist', 'title'):
+                values = suggestions.getall(tag)
                 if values and self.metadata.getall(tag) == list(values) and tag not in self._manually_edited_tags:
                     set_source(self, tag, 'MusicBrainz', 'https://musicbrainz.org/recording/' + recording_id)
             if first_release and self.metadata.getall('date') == [first_release]:
                 set_source(self, 'date', 'MusicBrainz', 'https://musicbrainz.org/recording/' + recording_id)
             self.update()
         if decision.source == Source.ACOUSTID:
-            acoustid = track.get('acoustid')
-            if acoustid:
-                self.metadata['acoustid_id'] = acoustid
-                set_source(self, 'acoustid_id', 'AcoustID')
             self.tagger.acoustidmanager.add(self, recording_id)
-        # Snapshot after acoustid_id is set, so the new AcoustID is kept.
+        # The recording ID remains in Picard's matching state; recognition
+        # must not stage it (or an AcoustID) as an audio tag.
         self._smart_scan_protected = protected_snapshot(self.metadata) or None
-        if decision.release_verified or not self.metadata.images:
-            self._smart_scan_images = None
-        else:
-            # Artwork of an unverified release must not replace existing art.
-            self._smart_scan_images = self.metadata.images.copy()
+        self._smart_scan_images = self.metadata.images.copy()
+        self._smart_scan_primary_only = True
+        self._smart_scan_recording_id = recording_id
         release = decision.release
         if decision.release_verified and release and release.get('release-group', {}).get('id'):
             releasegroup = self.tagger.get_release_group_by_id(release['release-group']['id'])
