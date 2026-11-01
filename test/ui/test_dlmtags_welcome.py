@@ -29,6 +29,7 @@ class DLMtagsWelcomeDialogTest(PicardTestCase):
     def test_greek_english_and_unknown_language_fallback(self):
         translations = {
             'Protect your music library': 'Προστατέψτε τη μουσική σας συλλογή',
+            'Welcome to DLMtags': 'Καλώς ήρθατε στο DLMtags',
             'Saving changes in DLMtags can overwrite existing metadata and, depending on your settings, modify filenames.': (
                 'Η αποθήκευση αλλαγών στο DLMtags μπορεί να αντικαταστήσει υπάρχοντα μεταδεδομένα και, '
                 'ανάλογα με τις ρυθμίσεις, να τροποποιήσει ονόματα αρχείων.'
@@ -54,8 +55,8 @@ class DLMtagsWelcomeDialogTest(PicardTestCase):
             self.set_config_values({'ui_language': 'el'})
             dialog = DLMtagsWelcomeDialog()
             self.addCleanup(dialog.deleteLater)
-            self.assertEqual('Προστατέψτε τη μουσική σας συλλογή', dialog.windowTitle())
-            self.assertEqual('Προστατέψτε τη μουσική σας συλλογή', dialog.title_label.text())
+            self.assertEqual('Καλώς ήρθατε στο DLMtags', dialog.windowTitle())
+            self.assertEqual('Καλώς ήρθατε στο DLMtags', dialog.title_label.text())
             self.assertIn('Η αποθήκευση αλλαγών', dialog.intro_label.text())
             self.assertEqual(
                 'Συνιστούμε:', dialog.findChild(QtWidgets.QLabel, 'dlmtagsWelcomeRecommendationHeading').text()
@@ -70,7 +71,7 @@ class DLMtagsWelcomeDialogTest(PicardTestCase):
             self.set_config_values({'ui_language': 'fr'})
             fallback = DLMtagsWelcomeDialog()
             self.addCleanup(fallback.deleteLater)
-            self.assertEqual('Protect your music library', fallback.windowTitle())
+            self.assertEqual('Welcome to DLMtags', fallback.windowTitle())
             self.assertIn('Saving changes in DLMtags', fallback.intro_label.text())
             self.assertEqual(
                 'We recommend:', fallback.findChild(QtWidgets.QLabel, 'dlmtagsWelcomeRecommendationHeading').text()
@@ -91,8 +92,9 @@ class DLMtagsWelcomeDialogTest(PicardTestCase):
         )
         self.assertGreaterEqual(displayed.width(), 110)
         self.assertLessEqual(displayed.width(), 130)
-        self.assertEqual(620, dialog.width())
-        self.assertLess(dialog.height(), 460)
+        self.assertEqual(700, dialog.width())
+        self.assertGreaterEqual(dialog.height(), 500)
+        self.assertLess(dialog.height(), 650)
 
     def test_checkbox_persistence_and_once_per_session(self):
         config = get_config()

@@ -40,7 +40,6 @@ from picard.file import File
 from picard.metadata import Metadata
 from picard.smartscan import (
     Outcome,
-    Reason,
 )
 from picard.tagprovenance import source_for
 
@@ -623,7 +622,7 @@ class DLMtagsSettingsVisibilityTest(InlineTestCase):
         navigation = DLMtagsSettingsNavigation()
         self.addCleanup(navigation.deleteLater)
         self.assertEqual(
-            ['dlmtags_general', 'dlmtags_api_keys', 'dlmtags_visible_tags', 'dlmtags_file_settings'],
+            ['dlmtags_general', 'dlmtags_api_keys', 'dlmtags_visible_tags', 'dlmtags_file_settings', 'dlmtags_about'],
             list(navigation.buttons),
         )
         selected = []
